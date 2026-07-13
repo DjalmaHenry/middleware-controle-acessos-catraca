@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' https: data:; style-src 'self'; script-src 'self'; connect-src 'self'">
+  <title>Ponte Escolar</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <aside class="sidebar">
+    <div class="brand"><span class="brand-mark">PE</span><div><strong>Ponte Escolar</strong><small>Controle de acesso</small></div></div>
+    <nav>
+      <button class="nav-item active" data-view="dashboard"><span>●</span> Monitor</button>
+      <button class="nav-item" data-view="history"><span>≡</span> Histórico</button>
+      <button class="nav-item" data-view="settings"><span>⚙</span> Configurações</button>
+    </nav>
+    <div class="sidebar-status"><span id="resident-dot" class="dot ok"></span><div><strong>Aplicativo ativo</strong><small>Funcionando em segundo plano</small></div></div>
+  </aside>
+
+  <main>
+    <header><div><h1 id="page-title">Monitor de acesso</h1><p id="page-subtitle">Acompanhe as entradas em tempo real</p></div><button id="sync-button" class="secondary">↻ Sincronizar</button></header>
+
+    <section id="dashboard" class="view active">
+      <div class="status-strip">
+        <div><span id="listener-dot" class="dot"></span><div><small>Control iD</small><strong id="listener-status">Iniciando...</strong></div></div>
+        <div><span id="active-dot" class="dot"></span><div><small>ActiveSoft</small><strong id="active-status">Aguardando</strong></div></div>
+        <div><span class="metric-icon">↗</span><div><small>Fila de envio</small><strong id="queue-status">0 pendências</strong></div></div>
+        <div><span class="metric-icon">♙</span><div><small>Alunos locais</small><strong id="student-count">0 sincronizados</strong></div></div>
+      </div>
+
+      <div class="monitor-grid">
+        <article class="last-access" id="last-access">
+          <div class="empty-state"><div class="face-placeholder">◎</div><h2>Aguardando passagem</h2><p>O último aluno identificado aparecerá aqui.</p></div>
+        </article>
+        <aside class="activity-panel"><div class="panel-heading"><div><h2>Atividade recente</h2><p>Últimas passagens registradas</p></div></div><div id="recent-list" class="recent-list"></div></aside>
+      </div>
+
+      <div id="demo-panel" class="demo-panel"><div><strong>Ambiente de demonstração</strong><p>Escolha um aluno para simular uma passagem completa.</p></div><select id="demo-student"></select><button id="demo-button" class="primary">Simular entrada</button></div>
+    </section>
+
+    <section id="history" class="view"><div class="table-wrap"><table><thead><tr><th>Aluno</th><th>Matrícula</th><th>Data e hora</th><th>Movimento</th><th>Status</th></tr></thead><tbody id="history-body"></tbody></table></div></section>
+
+    <section id="settings" class="view">
+      <form id="settings-form" class="settings-form">
+        <div class="form-section"><h2>ActiveSoft SIGA</h2><p>Credenciais usadas para sincronizar alunos e registrar frequência.</p><label>Endereço da API<input id="api-url" type="url" required placeholder="https://siga01.activesoft.com.br"></label><label>Token de acesso<input id="api-token" type="password" placeholder="Deixe vazio para manter o token atual"><small id="token-hint"></small></label></div>
+        <div class="form-section"><h2>Recepção da catraca</h2><p>A catraca deve alcançar este computador pela rede local.</p><div class="form-row"><label>Porta do receptor<input id="listener-port" type="number" min="1024" max="65535" required></label><label>Movimento padrão<select id="direction"><option value="E">Entrada</option><option value="S">Saída</option></select></label></div></div>
+        <div class="form-section"><h2>Funcionamento</h2><label class="switch-row"><span><strong>Iniciar com o Windows</strong><small>Mantém a integração ativa após ligar o computador.</small></span><input id="auto-start" type="checkbox"><i></i></label><label class="switch-row"><span><strong>Modo demonstração</strong><small>Não envia dados reais para a ActiveSoft.</small></span><input id="demo-mode" type="checkbox"><i></i></label></div>
+        <div id="form-message" class="form-message"></div><button class="primary save" type="submit">Salvar configurações</button>
+      </form>
+    </section>
+  </main>
+  <script src="renderer.js"></script>
+</body>
+</html>

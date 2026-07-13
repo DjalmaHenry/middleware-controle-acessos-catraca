@@ -1,0 +1,44 @@
+{
+  "name": "ponte-escolar",
+  "version": "0.1.0",
+  "description": "Integração local entre catracas Control iD e ActiveSoft SIGA",
+  "main": "dist/main/main.js",
+  "author": "",
+  "license": "UNLICENSED",
+  "scripts": {
+    "clean": "rm -rf dist release",
+    "build": "tsc && node scripts/copy-static.mjs",
+    "dev": "npm run build && electron .",
+    "start": "electron .",
+    "test": "npm run build && node --test dist/test/*.test.js",
+    "dist:win": "npm run build && electron-builder --win nsis --x64"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.3",
+    "electron": "^36.0.0",
+    "electron-builder": "^26.0.12",
+    "typescript": "^5.8.3"
+  },
+  "build": {
+    "appId": "br.com.ponteescolar.desktop",
+    "productName": "Ponte Escolar",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": "nsis"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Ponte Escolar",
+      "runAfterFinish": true
+    }
+  }
+}

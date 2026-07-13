@@ -1,0 +1,31 @@
+name: Gerar instalador Windows
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Obter código
+        uses: actions/checkout@v4
+      - name: Configurar Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Instalar dependências
+        run: npm ci
+      - name: Executar testes
+        run: npm test
+      - name: Gerar instalador
+        run: npm run dist:win
+      - name: Disponibilizar instalador
+        uses: actions/upload-artifact@v4
+        with:
+          name: ponte-escolar-windows
+          path: release/*Setup*.exe
+          if-no-files-found: error
