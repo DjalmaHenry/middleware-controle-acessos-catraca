@@ -155,7 +155,7 @@ function state(): AppState {
     activeSoft: activeSoftState,
     students: visibleStudents,
     recentAccesses: store.getRecentAccesses(),
-    pendingCount: store.getQueue().length,
+    pendingCount: store.getQueue().length + store.getPendingIdSecureAccesses().length,
     integrationLogs: store.getIntegrationLogs(),
     networkAddresses: localIpv4Addresses(),
     controlIdMappingCount: store.getControlIdMappingCount(),

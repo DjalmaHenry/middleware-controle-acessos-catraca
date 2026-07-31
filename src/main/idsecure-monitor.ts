@@ -3,7 +3,7 @@ import { request as httpsRequest } from "node:https";
 import { AccessService } from "./access-service";
 import { IntegrationLogger } from "./integration-logger";
 import { JsonStore } from "./store";
-import { Direction, Settings } from "../shared/types";
+import { Direction, PendingIdSecureAccess, Settings } from "../shared/types";
 
 const POLL_INTERVAL_MS = 3_000;
 const REQUEST_TIMEOUT_MS = 15_000;
@@ -53,6 +53,9 @@ export interface IdSecureMonitorStatus {
 interface MonitorStore {
   getIdSecureMonitorCursor(): number | undefined;
   saveIdSecureMonitorCursor(cursor: number): void;
+  getPendingIdSecureAccesses(): PendingIdSecureAccess[];
+  savePendingIdSecureAccess(access: PendingIdSecureAccess): void;
+  removePendingIdSecureAccess(idLog: number): void;
   hasProcessedControlIdAccess(sourceId: string): boolean;
   markProcessedControlIdAccess(sourceId: string): void;
   saveControlIdMapping(userId: number | string, registration: string): void;
@@ -63,7 +66,8 @@ interface MonitorAccessService {
     userId: number,
     direction?: Direction,
     occurredAt?: string,
-    registration?: string
+    registration?: string,
+    sourceId?: string
   ): Promise<unknown>;
 }
 
@@ -85,7 +89,6 @@ export class IdSecureMonitorService {
   private accessToken?: string;
   private tokenExpiresAt = 0;
   private readonly users = new Map<string, IdSecureUser>();
-  private readonly eventFailures = new Map<string, number>();
   private lastError?: { message: string; loggedAt: number };
 
   constructor(
@@ -163,6 +166,7 @@ export class IdSecureMonitorService {
         initialCursor: baseline,
         detail: "O histórico anterior à conexão não será reenviado."
       });
+      await this.processPending(settings);
       return;
     }
 
@@ -191,49 +195,74 @@ export class IdSecureMonitorService {
         continue;
       }
 
+      this.store.savePendingIdSecureAccess({
+        idLog,
+        userId: Number(access.idUser),
+        name: access.name,
+        device: access.device,
+        info: access.info,
+        time: access.time,
+        attempts: 0
+      });
+      this.store.saveIdSecureMonitorCursor(idLog);
+    }
+
+    await this.processPending(settings);
+  }
+
+  private async processPending(settings: Settings): Promise<void> {
+    const pendingAccesses = this.store.getPendingIdSecureAccesses()
+      .sort((left, right) => left.idLog - right.idLog);
+
+    for (const pending of pendingAccesses) {
+      const sourceId = `idsecure:log:${pending.idLog}`;
+      if (this.store.hasProcessedControlIdAccess(sourceId)) {
+        this.store.removePendingIdSecureAccess(pending.idLog);
+        continue;
+      }
+
       try {
-        const userId = Number(access.idUser);
-        const user = await this.loadUserWithRetry(settings, userId, access.name);
-        const registration = String(user.registration ?? "").trim();
+        let registration = String(pending.registration ?? "").trim();
         if (!registration) {
-          throw new UnprocessableAccessError(`O usuário ${userId} (${access.name || "sem nome"}) não possui matrícula no iDSecure.`);
+          const user = await this.loadUserWithRetry(settings, pending.userId, pending.name);
+          registration = String(user.registration ?? "").trim();
+        }
+        if (!registration) {
+          throw new Error(`O usuário ${pending.userId} (${pending.name || "sem nome"}) não possui matrícula no iDSecure.`);
         }
 
-        const direction = directionFor(access.info, settings.direction);
-        this.store.saveControlIdMapping(userId, registration);
-        try {
-          await this.accessService.registerControlIdUser(
-            userId,
-            direction,
-            parseIdSecureDate(access.time),
-            registration
-          );
-        } catch (error) {
-          throw new UnprocessableAccessError(error instanceof Error ? error.message : String(error));
-        }
+        const direction = directionFor(pending.info, settings.direction);
+        this.store.savePendingIdSecureAccess({ ...pending, registration });
+        this.store.saveControlIdMapping(pending.userId, registration);
+        await this.accessService.registerControlIdUser(
+          pending.userId,
+          direction,
+          parseIdSecureDate(pending.time),
+          registration,
+          sourceId
+        );
         this.onDirection(direction);
-        this.eventFailures.delete(sourceId);
         this.store.markProcessedControlIdAccess(sourceId);
-        this.store.saveIdSecureMonitorCursor(idLog);
+        this.store.removePendingIdSecureAccess(pending.idLog);
       } catch (error) {
-        if (!(error instanceof UnprocessableAccessError)) throw error;
-        const attempts = (this.eventFailures.get(sourceId) ?? 0) + 1;
-        this.eventFailures.set(sourceId, attempts);
-        this.log("error", "Acesso autorizado ainda não pôde ser associado", {
-          idLog,
-          idUser: Number(access.idUser),
-          name: access.name || null,
-          attempt: attempts,
-          message: error.message
+        const attempts = pending.attempts + 1;
+        const message = error instanceof Error ? error.message : String(error);
+        this.store.savePendingIdSecureAccess({
+          ...pending,
+          attempts,
+          lastAttemptAt: new Date().toISOString(),
+          lastError: message
         });
-        if (attempts < 3) return;
-        this.log("error", "Acesso iDSecure ignorado após três tentativas", {
-          idLog,
-          detail: "O evento não foi enviado à ActiveSoft para não bloquear os acessos seguintes."
-        });
-        this.eventFailures.delete(sourceId);
-        this.store.markProcessedControlIdAccess(sourceId);
-        this.store.saveIdSecureMonitorCursor(idLog);
+        if (attempts === 1 || attempts % 10 === 0) {
+          this.log("error", "Acesso autorizado guardado para nova tentativa", {
+            idLog: pending.idLog,
+            idUser: pending.userId,
+            name: pending.name || null,
+            attempt: attempts,
+            message,
+            detail: "O evento permanece salvo no computador e não será descartado."
+          });
+        }
       }
     }
   }
@@ -286,7 +315,7 @@ export class IdSecureMonitorService {
       users = await this.queryUsers(settings, token, String(userId), "idDevice");
       user = users.find((item) => Number(item.idDevice ?? item.id) === userId);
     }
-    if (!user) throw new UnprocessableAccessError(`Usuário iDSecure ${userId} não encontrado em Cadastros → Pessoas.`);
+    if (!user) throw new Error(`Usuário iDSecure ${userId} não encontrado em Cadastros → Pessoas.`);
     this.users.set(String(userId), user);
     return user;
   }
@@ -444,8 +473,6 @@ class HttpError extends Error {
     super(message);
   }
 }
-
-class UnprocessableAccessError extends Error {}
 
 function responseError(action: string, response: { status: number; body: Record<string, unknown> }): HttpError {
   return new HttpError(response.status, `${action} respondeu HTTP ${response.status}: ${errorDetail(response.body.error ?? response.body)}`);

@@ -95,6 +95,19 @@ export interface ControlIdDeviceContact {
   observedTurn?: "left" | "right";
 }
 
+export interface PendingIdSecureAccess {
+  idLog: number;
+  userId: number;
+  registration?: string;
+  name?: string;
+  device?: string;
+  info?: string;
+  time?: string;
+  attempts: number;
+  lastAttemptAt?: string;
+  lastError?: string;
+}
+
 export interface AppState {
   appVersion: string;
   settings: Omit<Settings, "activeSoftToken" | "controlIdPassword" | "idSecurePassword"> & {

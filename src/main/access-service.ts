@@ -6,6 +6,7 @@ import { IntegrationLogger } from "./integration-logger";
 
 export class AccessService {
   private processing = false;
+  private readonly inFlight = new Map<string, Promise<AccessRecord>>();
   constructor(
     private readonly store: JsonStore,
     private readonly activeSoft: ActiveSoftClient,
@@ -13,27 +14,37 @@ export class AccessService {
     private readonly log: IntegrationLogger
   ) {}
 
-  async register(studentId: number, direction?: Direction, occurredAt = new Date().toISOString()): Promise<AccessRecord> {
+  async register(
+    studentId: number,
+    direction?: Direction,
+    occurredAt = new Date().toISOString(),
+    recordId: string = randomUUID()
+  ): Promise<AccessRecord> {
     if (!this.store.getStudentSync()) {
       throw new Error("Não existe uma sincronização real de alunos da ActiveSoft disponível. Configure o token e sincronize antes de processar acessos.");
     }
     const student = this.store.getStudents().find((item) => item.id === studentId);
     if (!student) throw new Error(`Aluno ${studentId} não encontrado na sincronização local.`);
+    const existing = this.store.getRecentAccesses().find((item) => item.id === recordId)
+      ?? this.store.getQueue().find((item) => item.id === recordId);
+    if (existing?.status === "sent") return existing;
+    if (existing) return this.sendOnce(existing);
     const record: AccessRecord = {
-      id: randomUUID(), studentId, studentName: student.nome, matricula: student.matricula,
+      id: recordId, studentId, studentName: student.nome, matricula: student.matricula,
       photoUrl: student.urlFoto, direction: direction ?? this.store.getSettings().direction,
       occurredAt, status: "sending"
     };
     this.store.addAccess(record);
     this.onChange();
-    return this.send(record);
+    return this.sendOnce(record);
   }
 
   async registerControlIdUser(
     userId: number,
     direction?: Direction,
     occurredAt = new Date().toISOString(),
-    registration?: string
+    registration?: string,
+    sourceId?: string
   ): Promise<AccessRecord> {
     const mappedRegistration = registration || this.store.getControlIdRegistration(userId);
     const students = this.store.getStudents();
@@ -47,17 +58,25 @@ export class AccessService {
       this.log("error", "Não foi possível associar o acesso a um aluno", { user_id: userId, registration: mappedRegistration, message });
       throw new Error(message);
     }
-    return this.register(student.id, direction, occurredAt);
+    return this.register(student.id, direction, occurredAt, sourceId);
   }
 
   async retryQueue(): Promise<void> {
     if (this.processing) return;
     this.processing = true;
     try {
-      for (const record of this.store.getQueue().reverse()) await this.send(record);
+      for (const record of this.store.getQueue().reverse()) await this.sendOnce(record);
     } finally {
       this.processing = false;
     }
+  }
+
+  private sendOnce(record: AccessRecord): Promise<AccessRecord> {
+    const existing = this.inFlight.get(record.id);
+    if (existing) return existing;
+    const request = this.send(record).finally(() => this.inFlight.delete(record.id));
+    this.inFlight.set(record.id, request);
+    return request;
   }
 
   private async send(record: AccessRecord): Promise<AccessRecord> {

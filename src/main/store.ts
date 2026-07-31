@@ -2,7 +2,7 @@ import { app, safeStorage } from "electron";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
-import { AccessRecord, ControlIdDeviceConfig, IntegrationLog, IntegrationLogCategory, Settings, Student, StudentSyncState } from "../shared/types";
+import { AccessRecord, ControlIdDeviceConfig, IntegrationLog, IntegrationLogCategory, PendingIdSecureAccess, Settings, Student, StudentSyncState } from "../shared/types";
 import { normalizeStudentSync } from "./student-cache-check";
 
 interface PersistedData {
@@ -23,6 +23,7 @@ interface PersistedData {
   pendingControlIdAccesses: Record<string, { userId: number; time: number; registration?: string }>;
   controlIdPollingCursors: Record<string, number>;
   idSecureMonitorCursor?: number;
+  pendingIdSecureAccesses: Record<string, PendingIdSecureAccess>;
   processedControlIdAccesses: Record<string, string>;
 }
 
@@ -54,6 +55,7 @@ const defaults: PersistedData = {
   pendingControlIdAccesses: {},
   controlIdPollingCursors: {},
   idSecureMonitorCursor: undefined,
+  pendingIdSecureAccesses: {},
   processedControlIdAccesses: {}
 };
 
@@ -163,6 +165,21 @@ export class JsonStore {
     this.data.idSecureMonitorCursor = cursor;
     this.persist();
   }
+  getPendingIdSecureAccesses(): PendingIdSecureAccess[] {
+    return Object.values(this.data.pendingIdSecureAccesses).map((access) => ({ ...access }));
+  }
+  savePendingIdSecureAccess(access: PendingIdSecureAccess): void {
+    const key = String(access.idLog);
+    this.data.pendingIdSecureAccesses[key] = {
+      ...this.data.pendingIdSecureAccesses[key],
+      ...access
+    };
+    this.persist();
+  }
+  removePendingIdSecureAccess(idLog: number): void {
+    delete this.data.pendingIdSecureAccesses[String(idLog)];
+    this.persist();
+  }
   hasProcessedControlIdAccess(sourceId: string): boolean {
     return Boolean(this.data.processedControlIdAccesses[sourceId]);
   }
@@ -237,10 +254,34 @@ function normalizePersistedData(loaded: Partial<PersistedData>): PersistedData {
     idSecureMonitorCursor: typeof loaded.idSecureMonitorCursor === "number"
       ? loaded.idSecureMonitorCursor
       : undefined,
+    pendingIdSecureAccesses: normalizePendingIdSecureAccesses(loaded.pendingIdSecureAccesses),
     processedControlIdAccesses: loaded.processedControlIdAccesses && typeof loaded.processedControlIdAccesses === "object"
       ? loaded.processedControlIdAccesses
       : {}
   };
+}
+
+function normalizePendingIdSecureAccesses(value: unknown): Record<string, PendingIdSecureAccess> {
+  if (!value || typeof value !== "object") return {};
+  return Object.fromEntries(Object.entries(value).flatMap(([key, entry]) => {
+    if (!entry || typeof entry !== "object") return [];
+    const source = entry as Partial<PendingIdSecureAccess>;
+    const idLog = Number(source.idLog ?? key);
+    const userId = Number(source.userId);
+    if (!Number.isFinite(idLog) || !Number.isFinite(userId) || idLog <= 0 || userId <= 0) return [];
+    return [[String(idLog), {
+      idLog,
+      userId,
+      registration: typeof source.registration === "string" ? source.registration : undefined,
+      name: typeof source.name === "string" ? source.name : undefined,
+      device: typeof source.device === "string" ? source.device : undefined,
+      info: typeof source.info === "string" ? source.info : undefined,
+      time: typeof source.time === "string" ? source.time : undefined,
+      attempts: Number.isFinite(Number(source.attempts)) ? Math.max(0, Number(source.attempts)) : 0,
+      lastAttemptAt: typeof source.lastAttemptAt === "string" ? source.lastAttemptAt : undefined,
+      lastError: typeof source.lastError === "string" ? source.lastError : undefined
+    } satisfies PendingIdSecureAccess]];
+  }));
 }
 
 function normalizeSettings(value: unknown): PersistedData["settings"] {

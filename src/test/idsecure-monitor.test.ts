@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { IdSecureMonitorService, JsonRequester } from "../main/idsecure-monitor";
-import { Direction, Settings } from "../shared/types";
+import { Direction, PendingIdSecureAccess, Settings } from "../shared/types";
 
 const settings: Settings = {
   configured: true,
@@ -26,8 +26,14 @@ class MemoryStore {
   cursor?: number;
   processed = new Set<string>();
   mappings = new Map<string, string>();
+  pending = new Map<number, PendingIdSecureAccess>();
   getIdSecureMonitorCursor(): number | undefined { return this.cursor; }
   saveIdSecureMonitorCursor(cursor: number): void { this.cursor = cursor; }
+  getPendingIdSecureAccesses(): PendingIdSecureAccess[] { return [...this.pending.values()].map((item) => ({ ...item })); }
+  savePendingIdSecureAccess(access: PendingIdSecureAccess): void {
+    this.pending.set(access.idLog, { ...this.pending.get(access.idLog), ...access });
+  }
+  removePendingIdSecureAccess(idLog: number): void { this.pending.delete(idLog); }
   hasProcessedControlIdAccess(id: string): boolean { return this.processed.has(id); }
   markProcessedControlIdAccess(id: string): void { this.processed.add(id); }
   saveControlIdMapping(userId: number | string, registration: string): void {
@@ -59,13 +65,13 @@ test("processa o monitor Enterprise por idLog e resolve a matrícula", async () 
       }
     };
   };
-  const attendance: Array<{ userId: number; direction?: Direction; registration?: string; occurredAt?: string }> = [];
+  const attendance: Array<{ userId: number; direction?: Direction; registration?: string; occurredAt?: string; sourceId?: string }> = [];
   const logs: Array<{ category: string; title: string }> = [];
   const directions: Direction[] = [];
   const service = new IdSecureMonitorService(
     {
-      registerControlIdUser: async (userId, direction, occurredAt, registration) => {
-        attendance.push({ userId, direction, occurredAt, registration });
+      registerControlIdUser: async (userId, direction, occurredAt, registration, sourceId) => {
+        attendance.push({ userId, direction, occurredAt, registration, sourceId });
       }
     },
     store,
@@ -85,7 +91,8 @@ test("processa o monitor Enterprise por idLog e resolve a matrícula", async () 
     userId: 1001440,
     direction: "S",
     registration: "0054",
-    occurredAt: "2026-07-31T15:47:30.000Z"
+    occurredAt: "2026-07-31T15:47:30.000Z",
+    sourceId: "idsecure:log:175326"
   }]);
   assert.equal(store.cursor, 175326);
   assert.equal(store.mappings.get("1001440"), "0054");
@@ -126,7 +133,7 @@ test("refaz o login quando o Bearer expira", async () => {
   assert.equal(store.cursor, 0);
 });
 
-test("um usuário sem matrícula não bloqueia os acessos seguintes", async () => {
+test("um usuário sem matrícula permanece salvo e não bloqueia os acessos seguintes", async () => {
   const store = new MemoryStore();
   store.cursor = 200;
   const requester: JsonRequester = async (url) => {
@@ -154,9 +161,54 @@ test("um usuário sem matrícula não bloqueia os acessos seguintes", async () =
   );
 
   await service.pollNow();
-  await service.pollNow();
-  assert.equal(store.cursor, 200);
-  await service.pollNow();
   assert.equal(store.cursor, 202);
   assert.deepEqual(registrations, ["0099"]);
+  assert.equal(store.pending.has(201), true);
+  assert.equal(store.pending.has(202), false);
+
+  await service.pollNow();
+  await service.pollNow();
+  assert.equal(store.pending.has(201), true, "um evento inválido não pode ser descartado após novas tentativas");
+  assert.deepEqual(registrations, ["0099"], "o evento seguinte não pode ser enviado novamente");
+});
+
+test("retoma após reinício um acesso persistido antes do envio", async () => {
+  const store = new MemoryStore();
+  store.cursor = 300;
+  store.pending.set(300, {
+    idLog: 300,
+    userId: 42,
+    name: "aluna",
+    device: "CATRACA 1",
+    info: "Entrada",
+    time: "/Date(1785512850000-0300)/",
+    attempts: 4,
+    lastError: "ActiveSoft temporariamente indisponível"
+  });
+  const requester: JsonRequester = async (url) => {
+    if (url.pathname === "/api/login/") return { status: 200, body: { accessToken: "token" } };
+    if (url.pathname === "/api/user/list") {
+      return { status: 200, body: { data: [{ idDevice: 42, name: "aluna", registration: "0012" }] } };
+    }
+    return { status: 200, body: { data: [] } };
+  };
+  const sourceIds: string[] = [];
+  const service = new IdSecureMonitorService(
+    {
+      registerControlIdUser: async (_userId, _direction, _occurredAt, _registration, sourceId) => {
+        sourceIds.push(String(sourceId));
+      }
+    },
+    store,
+    () => settings,
+    () => undefined,
+    () => undefined,
+    () => undefined,
+    requester
+  );
+
+  await service.pollNow();
+  assert.deepEqual(sourceIds, ["idsecure:log:300"]);
+  assert.equal(store.pending.size, 0);
+  assert.equal(store.processed.has("idsecure:log:300"), true);
 });

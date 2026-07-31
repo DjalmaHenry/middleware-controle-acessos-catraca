@@ -37,7 +37,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\build-windows.ps1
 O instalador será criado em:
 
 ```text
-release\Ponte ID Setup 0.2.1.exe
+release\Ponte ID Setup 0.2.2.exe
 ```
 
 Para executar cada etapa manualmente:
@@ -66,7 +66,7 @@ Em um Mac com Node.js 22 LTS, execute na raiz do projeto:
 O script instala as dependências, executa os testes e gera o mesmo instalador NSIS x64 em:
 
 ```text
-release/Ponte ID Setup 0.2.1.exe
+release/Ponte ID Setup 0.2.2.exe
 ```
 
 Em Macs com Apple Silicon, o script verifica e instala o Rosetta 2 automaticamente na primeira execução. Esta build não requer Docker nem Wine. O comando equivalente pelo npm é `npm run build:windows:macos`.
@@ -87,7 +87,7 @@ Na instalação Enterprise, a pessoa identificada fica no servidor central, enqu
 - `GET /api/access/monitor`, para acompanhar eventos incrementalmente por `idLog`;
 - `POST /api/user/list`, para localizar o campo `registration` pelo `idUser`.
 
-O certificado HTTPS local do iDSecure é aceito somente nas requisições ao endereço explicitamente configurado. O Bearer nunca é persistido. Na primeira conexão, o cursor começa no último `idLog`, evitando enviar histórico antigo; depois disso, o cursor e os eventos processados são persistidos para impedir duplicidade após reinício.
+O certificado HTTPS local do iDSecure é aceito somente nas requisições ao endereço explicitamente configurado. O Bearer nunca é persistido. Na primeira conexão, o cursor começa no último `idLog`, evitando enviar histórico antigo. Depois disso, cada acesso autorizado é salvo no disco antes de o cursor avançar e permanece em uma fila durável até ser aceito pela fila da ActiveSoft. O `idLog` é usado como identificador determinístico para deduplicar retomadas e chamadas simultâneas após reinício.
 
 Eventos negados, não identificados ou pendentes aparecem no Console, mas somente `eventCode: 7` com matrícula válida é enviado à ActiveSoft. O campo `info` do monitor define diretamente Entrada ou Saída.
 
