@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { ActiveSoftClient } from "./active-soft";
 import { JsonStore } from "./store";
-import { AccessRecord, Direction, Student } from "../shared/types";
+import { AccessRecord, Direction } from "../shared/types";
 import { IntegrationLogger } from "./integration-logger";
 
 export class AccessService {
@@ -14,7 +14,7 @@ export class AccessService {
   ) {}
 
   async register(studentId: number, direction?: Direction, occurredAt = new Date().toISOString()): Promise<AccessRecord> {
-    if (!this.store.getSettings().demoMode && this.store.getStudentSync()?.source !== "activesoft") {
+    if (!this.store.getStudentSync()) {
       throw new Error("Não existe uma sincronização real de alunos da ActiveSoft disponível. Configure o token e sincronize antes de processar acessos.");
     }
     const student = this.store.getStudents().find((item) => item.id === studentId);
@@ -60,29 +60,9 @@ export class AccessService {
     }
   }
 
-  seedDemoStudents(): Student[] {
-    const students: Student[] = [
-      { id: 101, matricula: "202600101", nome: "Marina Oliveira", turma: "7º Ano A", urlFoto: "https://i.pravatar.cc/600?img=47" },
-      { id: 102, matricula: "202600102", nome: "Lucas Almeida", turma: "8º Ano B", urlFoto: "https://i.pravatar.cc/600?img=12" },
-      { id: 103, matricula: "202600103", nome: "Beatriz Santos", turma: "6º Ano A", urlFoto: "https://i.pravatar.cc/600?img=32" }
-    ];
-    this.store.saveStudents(students, "demo");
-    this.onChange();
-    return students;
-  }
-
   private async send(record: AccessRecord): Promise<AccessRecord> {
     try {
-      if (this.store.getSettings().demoMode) {
-        this.log("api-out", "SIMULAÇÃO POST ActiveSoft /api/v0/marcar_frequencia_aluno/", {
-          data_hora: record.occurredAt,
-          tipo_entrada_saida: record.direction,
-          matricula: record.matricula,
-          comentario: "Catraca Control iD"
-        });
-        await new Promise((resolve) => setTimeout(resolve, 350));
-        this.log("api-in", "SIMULAÇÃO 201 ActiveSoft - frequência registrada", { ok: true });
-      } else await this.activeSoft.markAttendance(record.matricula, record.direction, record.occurredAt);
+      await this.activeSoft.markAttendance(record.matricula, record.direction, record.occurredAt);
       const sent = { ...record, status: "sent" as const, message: undefined };
       this.store.dequeue(record.id);
       this.store.addAccess(sent);

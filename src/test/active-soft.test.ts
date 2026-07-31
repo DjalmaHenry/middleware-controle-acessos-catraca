@@ -12,7 +12,6 @@ const settings: Settings = {
   direction: "E",
   turnLeftDirection: "E",
   turnRightDirection: "S",
-  demoMode: false,
   developerMode: true
 };
 

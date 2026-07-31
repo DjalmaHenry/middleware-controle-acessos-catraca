@@ -7,7 +7,6 @@ contextBridge.exposeInMainWorld("ponte", {
   synchronize: (): Promise<void> => ipcRenderer.invoke("sync:run"),
   testConnection: (): Promise<boolean> => ipcRenderer.invoke("connection:test"),
   getAccessPhoto: (accessId: string): Promise<string | null> => ipcRenderer.invoke("photo:get", accessId),
-  simulateAccess: (studentId: number) => ipcRenderer.invoke("demo:access", studentId),
   clearLogs: (): Promise<void> => ipcRenderer.invoke("logs:clear"),
   prepareInstallation: (): Promise<InstallationReport> => ipcRenderer.invoke("installation:prepare"),
   validateInstallation: (): Promise<InstallationReport> => ipcRenderer.invoke("installation:validate"),

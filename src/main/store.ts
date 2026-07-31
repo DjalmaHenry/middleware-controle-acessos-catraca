@@ -3,6 +3,7 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFil
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { AccessRecord, IntegrationLog, IntegrationLogCategory, Settings, Student, StudentSyncState } from "../shared/types";
+import { normalizeStudentSync } from "./student-cache-check";
 
 interface PersistedData {
   settings: Omit<Settings, "activeSoftToken"> & { encryptedToken?: string; plainToken?: string };
@@ -24,7 +25,6 @@ const defaults: PersistedData = {
     direction: "E",
     turnLeftDirection: "E",
     turnRightDirection: "S",
-    demoMode: true,
     developerMode: false
   },
   students: [],
@@ -77,9 +77,9 @@ export class JsonStore {
   getStudentSync(): StudentSyncState | undefined {
     return this.data.studentSync ? { ...this.data.studentSync } : undefined;
   }
-  saveStudents(students: Student[], source: StudentSyncState["source"]): void {
+  saveStudents(students: Student[]): void {
     this.data.students = students;
-    this.data.studentSync = { source, syncedAt: new Date().toISOString() };
+    this.data.studentSync = { syncedAt: new Date().toISOString() };
     this.persist();
   }
   getRecentAccesses(): AccessRecord[] { return [...this.data.recentAccesses]; }
@@ -172,13 +172,15 @@ export class JsonStore {
 }
 
 function normalizePersistedData(loaded: Partial<PersistedData>): PersistedData {
+  const studentSync = normalizeStudentSync(loaded.studentSync);
+  const hasVerifiedStudentCache = Boolean(studentSync);
   return {
-    settings: { ...defaults.settings, ...(loaded.settings ?? {}) },
-    students: Array.isArray(loaded.students) ? loaded.students : [],
-    studentSync: isStudentSyncState(loaded.studentSync) ? loaded.studentSync : undefined,
-    recentAccesses: Array.isArray(loaded.recentAccesses) ? loaded.recentAccesses : [],
-    queue: Array.isArray(loaded.queue) ? loaded.queue : [],
-    integrationLogs: Array.isArray(loaded.integrationLogs) ? loaded.integrationLogs : [],
+    settings: normalizeSettings(loaded.settings),
+    students: hasVerifiedStudentCache && Array.isArray(loaded.students) ? loaded.students : [],
+    studentSync,
+    recentAccesses: hasVerifiedStudentCache && Array.isArray(loaded.recentAccesses) ? loaded.recentAccesses : [],
+    queue: hasVerifiedStudentCache && Array.isArray(loaded.queue) ? loaded.queue : [],
+    integrationLogs: hasVerifiedStudentCache && Array.isArray(loaded.integrationLogs) ? loaded.integrationLogs : [],
     controlIdMappings: loaded.controlIdMappings && typeof loaded.controlIdMappings === "object"
       ? loaded.controlIdMappings
       : {},
@@ -188,12 +190,26 @@ function normalizePersistedData(loaded: Partial<PersistedData>): PersistedData {
   };
 }
 
-function isStudentSyncState(value: unknown): value is StudentSyncState {
-  if (!value || typeof value !== "object") return false;
-  const candidate = value as Partial<StudentSyncState>;
-  return (candidate.source === "demo" || candidate.source === "activesoft")
-    && typeof candidate.syncedAt === "string"
-    && !Number.isNaN(Date.parse(candidate.syncedAt));
+function normalizeSettings(value: unknown): PersistedData["settings"] {
+  const source = value && typeof value === "object"
+    ? value as Partial<PersistedData["settings"]>
+    : {};
+  return {
+    configured: typeof source.configured === "boolean" ? source.configured : defaults.settings.configured,
+    activeSoftBaseUrl: typeof source.activeSoftBaseUrl === "string"
+      ? source.activeSoftBaseUrl
+      : defaults.settings.activeSoftBaseUrl,
+    listenerPort: typeof source.listenerPort === "number" ? source.listenerPort : defaults.settings.listenerPort,
+    autoStart: typeof source.autoStart === "boolean" ? source.autoStart : defaults.settings.autoStart,
+    direction: source.direction === "S" ? "S" : "E",
+    turnLeftDirection: source.turnLeftDirection === "S" ? "S" : "E",
+    turnRightDirection: source.turnRightDirection === "E" ? "E" : "S",
+    developerMode: typeof source.developerMode === "boolean"
+      ? source.developerMode
+      : defaults.settings.developerMode,
+    ...(typeof source.encryptedToken === "string" ? { encryptedToken: source.encryptedToken } : {}),
+    ...(typeof source.plainToken === "string" ? { plainToken: source.plainToken } : {})
+  };
 }
 
 function sanitizeLogPayload(payload: unknown): unknown {

@@ -114,36 +114,25 @@ export class InstallationService {
       resolution: autoStartEnabled ? undefined : "Clique em Preparar este computador e confirme no Gerenciador de Tarefas que Ponte ID está habilitado em Aplicativos de inicialização."
     });
 
-    if (settings.demoMode) {
+    try {
+      await this.dependencies.activeSoft.testConnection();
+      await this.dependencies.activeSoft.testAttendancePermission();
+      checks.push({
+        id: "activesoft",
+        title: "ActiveSoft SIGA",
+        status: "pass",
+        blocking: true,
+        detail: "Leitura de alunos e autorização do endpoint de frequência confirmadas sem alterar dados."
+      });
+    } catch (error) {
       checks.push({
         id: "activesoft",
         title: "ActiveSoft SIGA",
         status: "fail",
         blocking: true,
-        detail: "O modo demonstração está ativo; nenhuma conexão real foi validada.",
-        resolution: "Desative o modo demonstração, informe o token e salve antes de validar a instalação."
+        detail: error instanceof Error ? error.message : String(error),
+        resolution: "Confira endereço, token, permissões e acesso à internet. O Console mostra a resposta completa da API."
       });
-    } else {
-      try {
-        await this.dependencies.activeSoft.testConnection();
-        await this.dependencies.activeSoft.testAttendancePermission();
-        checks.push({
-          id: "activesoft",
-          title: "ActiveSoft SIGA",
-          status: "pass",
-          blocking: true,
-          detail: "Leitura de alunos e autorização do endpoint de frequência confirmadas sem alterar dados."
-        });
-      } catch (error) {
-        checks.push({
-          id: "activesoft",
-          title: "ActiveSoft SIGA",
-          status: "fail",
-          blocking: true,
-          detail: error instanceof Error ? error.message : String(error),
-          resolution: "Confira endereço, token, permissões e acesso à internet. O Console mostra a resposta completa da API."
-        });
-      }
     }
 
     checks.push(buildStudentCacheCheck(students, studentSync));

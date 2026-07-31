@@ -50,14 +50,10 @@ function render(state) {
   }
   renderControlIdStatus(state);
   const activeDot = $("#active-dot");
-  activeDot.className = `dot ${state.settings.demoMode ? "warn" : state.activeSoft.status === "online" ? "ok" : state.activeSoft.status === "offline" ? "bad" : ""}`;
-  $("#active-status").textContent = state.settings.demoMode ? "Modo demonstração" : state.activeSoft.status === "online" ? "Conectada" : state.activeSoft.status === "offline" ? "Sem conexão" : "Aguardando teste";
+  activeDot.className = `dot ${state.activeSoft.status === "online" ? "ok" : state.activeSoft.status === "offline" ? "bad" : ""}`;
+  $("#active-status").textContent = state.activeSoft.status === "online" ? "Conectada" : state.activeSoft.status === "offline" ? "Sem conexão" : "Aguardando teste";
   $("#queue-status").textContent = `${state.pendingCount} ${state.pendingCount === 1 ? "pendência" : "pendências"}`;
   $("#student-count").textContent = `${state.students.length} sincronizados`;
-  $("#demo-panel").style.display = state.settings.demoMode ? "flex" : "none";
-
-  const options = state.students.map((student) => `<option value="${student.id}">${escapeHtml(student.nome)}</option>`).join("");
-  if ($("#demo-student").innerHTML !== options) $("#demo-student").innerHTML = options;
   const latest = state.recentAccesses[0];
   if (latest) {
     const parts = timeParts(latest.occurredAt);
@@ -75,12 +71,6 @@ function render(state) {
 function renderControlIdStatus(state) {
   const dot = $("#listener-dot");
   const status = $("#listener-status");
-  if (state.settings.demoMode) {
-    dot.className = "dot warn";
-    status.textContent = "Modo demonstração";
-    status.title = `Receptor local na porta ${state.listener.port}`;
-    return;
-  }
   if (!state.listener.running) {
     dot.className = "dot bad";
     status.textContent = "Receptor parado";
@@ -257,7 +247,6 @@ function fillSettings(state) {
   $("#turn-left-direction").value = state.settings.turnLeftDirection;
   $("#turn-right-direction").value = state.settings.turnRightDirection;
   $("#auto-start").checked = state.settings.autoStart;
-  $("#demo-mode").checked = state.settings.demoMode;
   $("#developer-mode").checked = state.settings.developerMode;
   $("#token-hint").textContent = state.settings.tokenConfigured ? "Token armazenado com proteção do Windows." : "Nenhum token configurado.";
 }
@@ -271,7 +260,7 @@ $("#settings-form").addEventListener("submit", async (event) => {
       activeSoftBaseUrl: $("#api-url").value.trim(), activeSoftToken: $("#api-token").value.trim() || undefined,
       listenerPort: Number($("#listener-port").value), direction: $("#direction").value,
       turnLeftDirection: $("#turn-left-direction").value, turnRightDirection: $("#turn-right-direction").value,
-      autoStart: true, demoMode: $("#demo-mode").checked,
+      autoStart: true,
       developerMode: $("#developer-mode").checked
     });
     $("#api-token").value = ""; render(state); message.textContent = "Configurações salvas.";
@@ -279,7 +268,6 @@ $("#settings-form").addEventListener("submit", async (event) => {
 });
 
 $("#sync-button").addEventListener("click", async () => { $("#sync-button").disabled = true; try { await window.ponte.synchronize(); } finally { $("#sync-button").disabled = false; } });
-$("#demo-button").addEventListener("click", async () => { const id = Number($("#demo-student").value); if (id) await window.ponte.simulateAccess(id); });
 $("#clear-console").addEventListener("click", () => window.ponte.clearLogs());
 $("#prepare-installation").addEventListener("click", () => runInstallationAction(
   () => window.ponte.prepareInstallation(),

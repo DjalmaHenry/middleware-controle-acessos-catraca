@@ -8,7 +8,6 @@ declare global {
       synchronize(): Promise<void>;
       testConnection(): Promise<boolean>;
       getAccessPhoto(accessId: string): Promise<string | null>;
-      simulateAccess(studentId: number): Promise<void>;
       clearLogs(): Promise<void>;
       prepareInstallation(): Promise<InstallationReport>;
       validateInstallation(): Promise<InstallationReport>;

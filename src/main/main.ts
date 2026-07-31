@@ -72,12 +72,8 @@ async function bootstrap(): Promise<void> {
     platform: process.platform,
     listenerPort: startupSettings.listenerPort
   });
-  if (
-    store.getSettings().demoMode
-    && (store.getStudents().length === 0 || !store.getStudentSync())
-  ) accessService.seedDemoStudents();
   setInterval(() => void accessService.retryQueue(), 30_000);
-  if (store.getSettings().configured && !store.getSettings().demoMode) void synchronize();
+  if (store.getSettings().configured) void synchronize();
 }
 
 function createWindow(): void {
@@ -114,7 +110,7 @@ function state(): AppState {
   const { activeSoftToken, ...publicSettings } = settings;
   const students = store.getStudents();
   const studentSync = store.getStudentSync();
-  const visibleStudents = settings.demoMode || studentSync?.source === "activesoft" ? students : [];
+  const visibleStudents = studentSync ? students : [];
   return {
     settings: { ...publicSettings, tokenConfigured: Boolean(activeSoftToken) },
     listener: listenerState,
@@ -156,15 +152,9 @@ async function restartListener(): Promise<void> {
 }
 
 async function synchronize(): Promise<void> {
-  if (store.getSettings().demoMode) {
-    if (store.getStudents().length === 0 || !store.getStudentSync()) accessService.seedDemoStudents();
-    activeSoftState = { status: "unknown", message: "Modo demonstração ativo" };
-    broadcastState();
-    return;
-  }
   try {
     const students = await activeSoft.listStudents();
-    store.saveStudents(students, "activesoft");
+    store.saveStudents(students);
     activeSoftState = { status: "online", message: `${students.length} alunos sincronizados` };
   } catch (error) {
     activeSoftState = { status: "offline", message: error instanceof Error ? error.message : String(error) };
@@ -184,12 +174,8 @@ function registerIpc(): void {
     };
     store.saveSettings(settings);
     enableAutoStart();
-    if (
-      settings.demoMode
-      && (store.getStudents().length === 0 || !store.getStudentSync())
-    ) accessService.seedDemoStudents();
     await restartListener();
-    if (!settings.demoMode) await synchronize();
+    await synchronize();
     return state();
   });
   ipcMain.handle("sync:run", synchronize);
@@ -198,21 +184,6 @@ function registerIpc(): void {
     if (typeof accessId !== "string" || accessId.length > 100) return null;
     const access = store.getRecentAccesses().find((item) => item.id === accessId);
     return photoService.resolve(access?.photoUrl);
-  });
-  ipcMain.handle("demo:access", async (_event, studentId: number) => {
-    const student = store.getStudents().find((item) => item.id === studentId);
-    integrationLog("device-in", "SIMULAÇÃO giro confirmado pela catraca", {
-      event: { type: 7, name: "TURN LEFT", time: Math.floor(Date.now() / 1000) },
-      user_id: studentId,
-      registration: student?.matricula,
-      device_id: 999001
-    });
-    return accessService.registerControlIdUser(
-      studentId,
-      store.getSettings().turnLeftDirection,
-      new Date().toISOString(),
-      student?.matricula
-    );
   });
   ipcMain.handle("logs:clear", () => { store.clearIntegrationLogs(); broadcastState(); });
   ipcMain.handle("installation:prepare", async () => {

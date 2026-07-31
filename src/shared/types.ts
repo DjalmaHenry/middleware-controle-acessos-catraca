@@ -9,7 +9,6 @@ export interface Settings {
   direction: Direction;
   turnLeftDirection: Direction;
   turnRightDirection: Direction;
-  demoMode: boolean;
   developerMode: boolean;
 }
 
@@ -22,7 +21,6 @@ export interface Student {
 }
 
 export interface StudentSyncState {
-  source: "demo" | "activesoft";
   syncedAt: string;
 }
 
@@ -103,6 +101,5 @@ export interface SaveSettingsInput {
   direction: Direction;
   turnLeftDirection: Direction;
   turnRightDirection: Direction;
-  demoMode: boolean;
   developerMode: boolean;
 }
