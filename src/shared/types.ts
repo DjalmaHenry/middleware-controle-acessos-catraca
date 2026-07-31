@@ -4,6 +4,7 @@ export interface Settings {
   configured: boolean;
   activeSoftBaseUrl: string;
   activeSoftToken: string;
+  idSecureBaseUrl: string;
   listenerPort: number;
   autoStart: boolean;
   direction: Direction;
@@ -97,6 +98,7 @@ export interface AppState {
 export interface SaveSettingsInput {
   activeSoftBaseUrl: string;
   activeSoftToken?: string;
+  idSecureBaseUrl: string;
   listenerPort: number;
   autoStart: boolean;
   direction: Direction;

@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { request as httpsRequest } from "node:https";
 import { promisify } from "node:util";
 import { ActiveSoftClient } from "./active-soft";
 import { IntegrationLogger } from "./integration-logger";
@@ -15,11 +16,10 @@ const CONTROL_ID_ONLINE_WINDOW_MS = 2 * 60 * 1000;
 interface InstallationDependencies {
   store: JsonStore;
   activeSoft: ActiveSoftClient;
-  listenerState: () => { running: boolean; port: number; error?: string };
   controlIdDevices: () => ControlIdDeviceContact[];
   observedControlIdTurns: () => Array<"left" | "right">;
   networkAddresses: () => string[];
-  restartListener: () => Promise<void>;
+  ensureListener: () => Promise<{ running: boolean; port: number; error?: string }>;
   log: IntegrationLogger;
 }
 
@@ -35,7 +35,7 @@ export class InstallationService {
 
     enableAutoStart();
     if (!settings.autoStart) this.dependencies.store.saveSettings({ ...settings, autoStart: true });
-    await this.dependencies.restartListener();
+    await this.dependencies.ensureListener();
 
     if (process.platform === "win32") {
       try {
@@ -59,7 +59,7 @@ export class InstallationService {
   async validate(): Promise<InstallationReport> {
     const checks: InstallationCheck[] = [];
     const settings = this.dependencies.store.getSettings();
-    const listener = this.dependencies.listenerState();
+    const listener = await this.dependencies.ensureListener();
     const addresses = this.dependencies.networkAddresses();
     const students = this.dependencies.store.getStudents();
     const studentSync = this.dependencies.store.getStudentSync();
@@ -72,9 +72,9 @@ export class InstallationService {
       status: listener.running ? "pass" : "fail",
       blocking: true,
       detail: listener.running
-        ? `Escutando em 0.0.0.0:${listener.port}.`
+        ? `Escutando em 0.0.0.0:${listener.port}; resposta local /health confirmada.`
         : `O receptor não iniciou na porta ${listener.port}: ${listener.error ?? "erro desconhecido"}.`,
-      resolution: listener.running ? undefined : "Escolha outra porta livre, salve as configurações e execute a preparação novamente."
+      resolution: listener.running ? undefined : "O Ponte ID já tentou reiniciar o receptor. Feche outro programa que esteja usando essa porta ou escolha uma porta livre e execute a preparação novamente."
     });
 
     checks.push({
@@ -137,6 +137,8 @@ export class InstallationService {
     }
 
     checks.push(buildStudentCacheCheck(students, studentSync));
+
+    checks.push(await validateIdSecure(settings.idSecureBaseUrl));
 
     const recentDevices = devices.filter((device) =>
       Date.now() - new Date(device.lastSeenAt).getTime() <= CONTROL_ID_ONLINE_WINDOW_MS
@@ -206,14 +208,61 @@ export class InstallationService {
 
 async function installWindowsFirewallRule(port: number): Promise<void> {
   const innerScript = [
-    `$existing=Get-NetFirewallRule -DisplayName '${FIREWALL_RULE_NAME}' -ErrorAction SilentlyContinue`,
+    "$ErrorActionPreference='Stop'",
+    `$existing=Get-NetFirewallRule -PolicyStore PersistentStore -DisplayName '${FIREWALL_RULE_NAME}' -ErrorAction SilentlyContinue`,
     "if($existing){$existing|Remove-NetFirewallRule}",
-    `New-NetFirewallRule -DisplayName '${FIREWALL_RULE_NAME}' -Direction Inbound -Action Allow -Protocol TCP -LocalPort ${port} -Profile Domain,Private -RemoteAddress LocalSubnet | Out-Null`
+    `$created=New-NetFirewallRule -DisplayName '${FIREWALL_RULE_NAME}' -Direction Inbound -Action Allow -Protocol TCP -LocalPort ${port} -Profile Domain,Private -RemoteAddress LocalSubnet`,
+    "if(-not $created){throw 'A regra do Firewall não foi criada.'}"
   ].join(";");
   const innerEncoded = Buffer.from(innerScript, "utf16le").toString("base64");
   const outerScript = `$p=Start-Process -FilePath powershell.exe -Verb RunAs -Wait -PassThru -ArgumentList @('-NoProfile','-NonInteractive','-EncodedCommand','${innerEncoded}'); exit $p.ExitCode`;
   const outerEncoded = Buffer.from(outerScript, "utf16le").toString("base64");
   await execFileAsync("powershell.exe", ["-NoProfile", "-NonInteractive", "-EncodedCommand", outerEncoded], { timeout: 120_000 });
+}
+
+async function validateIdSecure(baseUrl: string): Promise<InstallationCheck> {
+  const result = await probeIdSecure(baseUrl);
+  return {
+    id: "idsecure",
+    title: "Servidor iDSecure",
+    status: result.ok ? "pass" : "warning",
+    blocking: false,
+    detail: result.ok
+      ? `${result.url} está acessível${result.statusCode ? ` (HTTP ${result.statusCode})` : ""}. Esta é a interface central; não é a porta receptora do Ponte ID.`
+      : `Não foi possível alcançar ${result.url}: ${result.detail ?? "sem resposta"}.`,
+    resolution: result.ok
+      ? undefined
+      : "Confirme se o endereço do iDSecure está correto e se este computador está na rede 192.168.1.x. Esse aviso não substitui o teste da porta 8787."
+  };
+}
+
+export async function probeIdSecure(baseUrl: string, timeoutMs = 3_000): Promise<{
+  ok: boolean;
+  url: string;
+  statusCode?: number;
+  detail?: string;
+}> {
+  let target: URL;
+  try {
+    target = new URL(baseUrl);
+    if (target.protocol !== "https:") throw new Error("o endereço deve usar HTTPS");
+  } catch (error) {
+    return { ok: false, url: baseUrl, detail: error instanceof Error ? error.message : String(error) };
+  }
+
+  target.hash = "";
+  return new Promise((resolve) => {
+    const request = httpsRequest(target, {
+      method: "HEAD",
+      rejectUnauthorized: false
+    }, (response) => {
+      response.resume();
+      resolve({ ok: true, url: target.origin, statusCode: response.statusCode });
+    });
+    request.setTimeout(timeoutMs, () => request.destroy(new Error(`tempo limite de ${timeoutMs} ms excedido`)));
+    request.on("error", (error) => resolve({ ok: false, url: target.origin, detail: error.message }));
+    request.end();
+  });
 }
 
 async function validateFirewall(port: number): Promise<InstallationCheck> {

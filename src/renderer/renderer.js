@@ -131,6 +131,8 @@ function renderConsole(state) {
 
 function renderInstallationGuide(state) {
   $("#guide-port").textContent = state.listener.port;
+  $("#guide-idsecure").textContent = state.settings.idSecureBaseUrl;
+  $("#guide-idsecure-step").textContent = state.settings.idSecureBaseUrl;
   $("#guide-addresses").textContent = state.networkAddresses.length
     ? state.networkAddresses.map((address) => `${address}:${state.listener.port}`).join(" · ")
     : "Nenhum IPv4 de rede detectado";
@@ -243,6 +245,7 @@ function fillSettings(state) {
   $("#app-version").textContent = `Versão ${state.appVersion}`;
   if (document.activeElement?.closest("#settings-form")) return;
   $("#api-url").value = state.settings.activeSoftBaseUrl;
+  $("#idsecure-url").value = state.settings.idSecureBaseUrl;
   $("#listener-port").value = state.settings.listenerPort;
   $("#direction").value = state.settings.direction;
   $("#turn-left-direction").value = state.settings.turnLeftDirection;
@@ -259,6 +262,7 @@ $("#settings-form").addEventListener("submit", async (event) => {
   try {
     const state = await window.ponte.saveSettings({
       activeSoftBaseUrl: $("#api-url").value.trim(), activeSoftToken: $("#api-token").value.trim() || undefined,
+      idSecureBaseUrl: $("#idsecure-url").value.trim(),
       listenerPort: Number($("#listener-port").value), direction: $("#direction").value,
       turnLeftDirection: $("#turn-left-direction").value, turnRightDirection: $("#turn-right-direction").value,
       autoStart: true,

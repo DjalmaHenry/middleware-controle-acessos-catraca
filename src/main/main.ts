@@ -10,6 +10,7 @@ import { createIntegrationLogger, IntegrationLogger } from "./integration-logger
 import { InstallationService } from "./installation-service";
 import { PhotoService } from "./photo-service";
 import { enableAutoStart, wasStartedAutomatically } from "./startup";
+import { probePonteListener } from "./listener-health";
 
 let window: BrowserWindow | null = null;
 let tray: Tray | null = null;
@@ -23,6 +24,7 @@ let photoService: PhotoService;
 let installationReport: InstallationReport | undefined;
 let listenerState: AppState["listener"] = { running: false, port: 8787 };
 let activeSoftState: AppState["activeSoft"] = { status: "unknown" };
+let listenerRestartPromise: Promise<void> | undefined;
 const controlIdDevices = new Map<string, ControlIdDeviceContact>();
 const observedControlIdTurns = new Set<"left" | "right">();
 let quitting = false;
@@ -56,23 +58,24 @@ async function bootstrap(): Promise<void> {
   installationService = new InstallationService({
     store,
     activeSoft,
-    listenerState: () => listenerState,
     controlIdDevices: () => [...controlIdDevices.values()],
     observedControlIdTurns: () => [...observedControlIdTurns],
     networkAddresses: localIpv4Addresses,
-    restartListener,
+    ensureListener: ensureListenerHealthy,
     log: integrationLog
   });
   registerIpc();
   createTray();
   createWindow();
-  await restartListener();
+  await ensureListenerHealthy();
   integrationLog("system", "Ponte ID iniciado", {
     version: app.getVersion(),
     platform: process.platform,
     listenerPort: startupSettings.listenerPort
   });
   setInterval(() => void accessService.retryQueue(), 30_000);
+  const listenerWatchdog = setInterval(() => void ensureListenerHealthy(), 30_000);
+  listenerWatchdog.unref();
   if (store.getSettings().configured) void synchronize();
 }
 
@@ -131,6 +134,12 @@ function state(): AppState {
 function broadcastState(): void { if (window && !window.isDestroyed()) window.webContents.send("state:changed", state()); }
 
 async function restartListener(): Promise<void> {
+  if (listenerRestartPromise) return listenerRestartPromise;
+  listenerRestartPromise = restartListenerNow().finally(() => { listenerRestartPromise = undefined; });
+  return listenerRestartPromise;
+}
+
+async function restartListenerNow(): Promise<void> {
   const port = store.getSettings().listenerPort;
   controlIdDevices.clear();
   observedControlIdTurns.clear();
@@ -150,6 +159,31 @@ async function restartListener(): Promise<void> {
     integrationLog?.("error", `Não foi possível iniciar o receptor na porta ${port}`, listenerState);
   }
   broadcastState();
+}
+
+async function ensureListenerHealthy(): Promise<AppState["listener"]> {
+  const port = store.getSettings().listenerPort;
+  const currentHealth = await probePonteListener(port);
+  if (currentHealth.ok) {
+    if (!listenerState.running || listenerState.port !== port) {
+      listenerState = { running: true, port };
+      broadcastState();
+    }
+    return listenerState;
+  }
+
+  await restartListener();
+  const repairedHealth = await probePonteListener(port);
+  if (!repairedHealth.ok) {
+    const detail = repairedHealth.detail ?? "A verificação local não recebeu resposta.";
+    listenerState = { running: false, port, error: detail };
+    integrationLog?.("error", `Receptor Control iD indisponível após tentativa automática de reparo`, {
+      port,
+      detail
+    });
+    broadcastState();
+  }
+  return listenerState;
 }
 
 async function synchronize(): Promise<void> {
@@ -175,7 +209,7 @@ function registerIpc(): void {
     };
     store.saveSettings(settings);
     enableAutoStart();
-    await restartListener();
+    await ensureListenerHealthy();
     await synchronize();
     return state();
   });

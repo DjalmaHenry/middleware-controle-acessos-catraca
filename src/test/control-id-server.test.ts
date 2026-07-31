@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
+import { createServer } from "node:http";
+import { AddressInfo } from "node:net";
 import test from "node:test";
 import { ControlIdServer } from "../main/control-id-server";
+import { probePonteListener } from "../main/listener-health";
 import { ControlIdDeviceContact } from "../shared/types";
 
 test("registra somente depois da confirmação de giro", async () => {
@@ -137,4 +140,38 @@ test("sinaliza conexão somente após notificação real da Control iD", async (
     assert.equal(contacts[0].deviceId, "77");
     assert.equal(contacts[0].path, "/api/notifications/device_is_alive");
   } finally { await server.stop(); }
+});
+
+test("confirma por health que a porta pertence ao Ponte ID", async () => {
+  const service = { registerControlIdUser: async () => ({} as never) };
+  const store = {
+    saveControlIdMapping: () => undefined,
+    getControlIdRegistration: () => undefined,
+    savePendingControlIdAccess: () => undefined,
+    getPendingControlIdAccess: () => undefined,
+    removePendingControlIdAccess: () => undefined
+  };
+  const settings = () => ({ turnLeftDirection: "E", turnRightDirection: "S", direction: "E" });
+  const server = new ControlIdServer(service as never, store as never, settings as never, () => undefined);
+  const port = await server.start(0);
+  try {
+    assert.deepEqual(await probePonteListener(port), { ok: true });
+  } finally { await server.stop(); }
+
+  const stopped = await probePonteListener(port, 100);
+  assert.equal(stopped.ok, false);
+
+  const foreignServer = createServer((_request, response) => {
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end(JSON.stringify({ ok: true }));
+  });
+  await new Promise<void>((resolve) => foreignServer.listen(0, "127.0.0.1", resolve));
+  try {
+    const foreignPort = (foreignServer.address() as AddressInfo).port;
+    const foreign = await probePonteListener(foreignPort);
+    assert.equal(foreign.ok, false);
+    assert.match(foreign.detail ?? "", /não pertence ao receptor Ponte ID/);
+  } finally {
+    await new Promise<void>((resolve) => foreignServer.close(() => resolve()));
+  }
 });

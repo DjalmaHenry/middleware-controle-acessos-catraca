@@ -20,6 +20,7 @@ const defaults: PersistedData = {
   settings: {
     configured: false,
     activeSoftBaseUrl: "https://siga01.activesoft.com.br",
+    idSecureBaseUrl: "https://192.168.1.2:30443",
     listenerPort: 8787,
     autoStart: true,
     direction: "E",
@@ -199,6 +200,9 @@ function normalizeSettings(value: unknown): PersistedData["settings"] {
     activeSoftBaseUrl: typeof source.activeSoftBaseUrl === "string"
       ? source.activeSoftBaseUrl
       : defaults.settings.activeSoftBaseUrl,
+    idSecureBaseUrl: typeof source.idSecureBaseUrl === "string"
+      ? source.idSecureBaseUrl
+      : defaults.settings.idSecureBaseUrl,
     listenerPort: typeof source.listenerPort === "number" ? source.listenerPort : defaults.settings.listenerPort,
     autoStart: typeof source.autoStart === "boolean" ? source.autoStart : defaults.settings.autoStart,
     direction: source.direction === "S" ? "S" : "E",

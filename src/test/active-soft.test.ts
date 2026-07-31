@@ -7,6 +7,7 @@ const settings: Settings = {
   configured: true,
   activeSoftBaseUrl: "https://siga01.activesoft.com.br",
   activeSoftToken: "test-token",
+  idSecureBaseUrl: "https://192.168.1.2:30443",
   listenerPort: 8787,
   autoStart: true,
   direction: "E",

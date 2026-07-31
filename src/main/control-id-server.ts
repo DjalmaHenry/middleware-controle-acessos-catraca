@@ -37,7 +37,11 @@ export class ControlIdServer {
   private async route(request: IncomingMessage, response: ServerResponse): Promise<void> {
     try {
       const url = new URL(request.url ?? "/", "http://localhost");
-      if (request.method === "GET" && url.pathname === "/health") return this.json(response, 200, { ok: true });
+      if (request.method === "GET" && url.pathname === "/health") {
+        response.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
+        response.end(JSON.stringify({ ok: true, service: "ponte-id" }));
+        return;
+      }
       if (request.method !== "POST") return this.json(response, 404, { error: "Rota não encontrada" });
       const body = await this.readBody(request);
       const parsedBody = this.parseBody(request, body);
