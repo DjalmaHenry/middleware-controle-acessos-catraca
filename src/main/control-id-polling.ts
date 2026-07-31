@@ -1,4 +1,5 @@
 import { AccessService } from "./access-service";
+import { PhysicalTurnEvent } from "./idsecure-monitor";
 import { IntegrationLogger } from "./integration-logger";
 import { JsonStore } from "./store";
 import { ControlIdDeviceConfig, ControlIdDeviceContact, Settings } from "../shared/types";
@@ -13,6 +14,14 @@ interface AccessEvent {
   timestamp?: number | string;
 }
 
+type PollingStore = Pick<JsonStore,
+  "getControlIdPollingCursor" |
+  "saveControlIdPollingCursor" |
+  "savePendingPhysicalTurn" |
+  "removePendingPhysicalTurn" |
+  "hasProcessedControlIdAccess"
+>;
+
 export class ControlIdPollingService {
   private timer?: NodeJS.Timeout;
   private running = false;
@@ -22,10 +31,11 @@ export class ControlIdPollingService {
 
   constructor(
     _accessService: AccessService | unknown,
-    _store: JsonStore | unknown,
+    private readonly store: PollingStore,
     private readonly getSettings: () => Settings,
     private readonly log: IntegrationLogger,
     private readonly onDeviceContact: (contact: ControlIdDeviceContact) => void = () => undefined,
+    private readonly onPhysicalEvent: (deviceName: string, event: PhysicalTurnEvent, sourceId: string) => Promise<boolean> = async () => false,
     private readonly fetchImpl: typeof fetch = fetch
   ) {}
 
@@ -70,24 +80,56 @@ export class ControlIdPollingService {
       object: "access_events",
       fields: ["id", "event", "type", "device_id", "timestamp"],
       order: ["id", "descending"],
-      limit: 1
+      limit: 50
     });
-    const event = events[0];
+    const orderedEvents = events
+      .filter((event) => Number.isFinite(Number(event.id)))
+      .sort((left, right) => Number(left.id) - Number(right.id));
+    const event = orderedEvents.at(-1);
     const eventId = Number(event?.id) || 0;
     const key = keyFor(device);
-    const previous = this.lastEventIds.get(key);
-    this.lastEventIds.set(key, eventId);
+    const previous = this.lastEventIds.get(key) ?? this.store.getControlIdPollingCursor(key);
 
     const turn = normalizeTurn(event?.type);
-    this.registerContact(device, "/load_objects.fcgi (diagnóstico direto)", turn);
+    this.registerContact(device, "/load_objects.fcgi (confirmação física)", turn);
     if (previous === undefined) {
-      this.log("system", `${device.name} conectada para diagnóstico`, {
+      this.lastEventIds.set(key, eventId);
+      this.store.saveControlIdPollingCursor(key, eventId);
+      this.log("system", `${device.name} conectada para confirmação física`, {
         address: baseUrl(device),
         latestAccessEventId: eventId,
         detail: "As identidades e matrículas são lidas no monitor central do iDSecure."
       });
-    } else if (eventId > previous && event) {
-      this.log("device-in", `${device.name}: evento físico observado`, { accessEvent: event });
+      return;
+    }
+
+    for (const accessEvent of orderedEvents.filter((item) => Number(item.id) > previous)) {
+      const physicalEvent = normalizePhysicalEvent(accessEvent.type);
+      this.log("device-in", `${device.name}: evento físico observado`, { accessEvent });
+      if (physicalEvent) {
+        const physicalKey = `${key}:${Number(accessEvent.id)}`;
+        const physicalSourceId = `controlid:turn:${physicalKey}`;
+        if (this.store.hasProcessedControlIdAccess(physicalSourceId)) {
+          this.store.removePendingPhysicalTurn(physicalKey);
+          const currentId = Number(accessEvent.id);
+          this.lastEventIds.set(key, currentId);
+          this.store.saveControlIdPollingCursor(key, currentId);
+          continue;
+        }
+        this.store.savePendingPhysicalTurn({
+          key: physicalKey,
+          device: device.name,
+          eventId: Number(accessEvent.id),
+          event: physicalEvent,
+          receivedAt: new Date().toISOString()
+        });
+        if (await this.onPhysicalEvent(device.name, physicalEvent, physicalSourceId)) {
+          this.store.removePendingPhysicalTurn(physicalKey);
+        }
+      }
+      const currentId = Number(accessEvent.id);
+      this.lastEventIds.set(key, currentId);
+      this.store.saveControlIdPollingCursor(key, currentId);
     }
   }
 
@@ -210,6 +252,12 @@ function keyFor(device: ControlIdDeviceConfig): string { return `${device.host}:
 function normalizeTurn(value: unknown): "TURN_LEFT" | "TURN_RIGHT" | undefined {
   const normalized = String(value ?? "").trim().replaceAll(" ", "_").toUpperCase();
   return normalized === "TURN_LEFT" || normalized === "TURN_RIGHT" ? normalized : undefined;
+}
+
+function normalizePhysicalEvent(value: unknown): PhysicalTurnEvent | undefined {
+  const normalized = String(value ?? "").trim().replaceAll(" ", "_").toUpperCase();
+  if (normalized === "TURN_LEFT" || normalized === "TURN_RIGHT" || normalized === "GIVE_UP") return normalized;
+  return undefined;
 }
 
 function isSessionError(error: unknown): boolean {

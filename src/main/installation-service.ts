@@ -235,7 +235,7 @@ export class InstallationService {
       resolution: devicesReady
         ? undefined
         : polling
-          ? "Confirme os IPs, porta 80 e credenciais das catracas. Essa consulta é diagnóstica e não substitui o monitor iDSecure."
+          ? "Confirme os IPs, porta 80 e credenciais das catracas. A identidade vem do monitor iDSecure e o giro físico vem desta consulta direta."
           : `No iDSecure, abra Acesso → Dispositivos, obtenha o IP de uma catraca e configure o Monitor dela para http://IP-DESTE-PC:${listener.port}/api/notifications. Depois faça uma passagem de teste.`
     });
 

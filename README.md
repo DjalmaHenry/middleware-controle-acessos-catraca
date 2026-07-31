@@ -37,7 +37,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\build-windows.ps1
 O instalador será criado em:
 
 ```text
-release\Ponte ID Setup 0.2.3.exe
+release\Ponte ID Setup 0.2.4.exe
 ```
 
 Para executar cada etapa manualmente:
@@ -66,7 +66,7 @@ Em um Mac com Node.js 22 LTS, execute na raiz do projeto:
 O script instala as dependências, executa os testes e gera o mesmo instalador NSIS x64 em:
 
 ```text
-release/Ponte ID Setup 0.2.3.exe
+release/Ponte ID Setup 0.2.4.exe
 ```
 
 Em Macs com Apple Silicon, o script verifica e instala o Rosetta 2 automaticamente na primeira execução. Esta build não requer Docker nem Wine. O comando equivalente pelo npm é `npm run build:windows:macos`.
@@ -89,11 +89,11 @@ Na instalação Enterprise, a pessoa identificada fica no servidor central, enqu
 
 O certificado HTTPS local do iDSecure é aceito somente nas requisições ao endereço explicitamente configurado. O Bearer nunca é persistido. Na primeira conexão, o cursor começa no último `idLog`, evitando enviar histórico antigo. Depois disso, cada acesso autorizado é salvo no disco antes de o cursor avançar e permanece em uma fila durável até ser aceito pela fila da ActiveSoft. O `idLog` é usado como identificador determinístico para deduplicar retomadas e chamadas simultâneas após reinício.
 
-Eventos negados, não identificados ou pendentes aparecem no Console, mas somente `eventCode: 7` com matrícula válida é enviado à ActiveSoft. O campo `info` do monitor define diretamente Entrada ou Saída.
+Eventos negados e não identificados aparecem no Console, mas não geram presença. Eventos autorizados (`eventCode: 7`) e eventos pendentes já liberados (`eventCode: 8` com `info: Liberado`) ficam guardados até o Ponte ID observar `TURN LEFT` ou `TURN RIGHT` na mesma catraca. Somente o giro físico confirma a presença; `GIVE UP` cancela a pendência. O sentido do giro define Entrada ou Saída conforme a calibração configurada.
 
 ## Diagnóstico direto das catracas
 
-O modo padrão de diagnóstico é **Consulta ativa**, adequado inclusive a computadores com Firewall gerenciado por GPO. O Ponte ID abre conexões HTTP de saída para cada dispositivo, autentica em `/login.fcgi` e consulta o último `access_event` apenas para confirmar conectividade e registrar eventos físicos no Console. Essa consulta não gera frequência.
+O modo padrão é **Consulta ativa**, adequado inclusive a computadores com Firewall gerenciado por GPO. O Ponte ID abre conexões HTTP de saída para cada dispositivo, autentica em `/login.fcgi` e consulta incrementalmente os `access_events`. A identidade e a matrícula vêm do monitor central; a consulta direta fornece a confirmação física do giro. Nenhuma das duas fontes isolada gera frequência: o aplicativo correlaciona dispositivo, ordem e uma janela curta antes de enviar.
 
 As catracas atuais vêm pré-configuradas na tela e podem ser editadas:
 

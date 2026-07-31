@@ -22,6 +22,17 @@ const settings: Settings = {
   developerMode: true
 };
 
+class MemoryPollingStore {
+  cursors = new Map<string, number>();
+  physical = new Map<string, unknown>();
+  processed = new Set<string>();
+  getControlIdPollingCursor(key: string): number | undefined { return this.cursors.get(key); }
+  saveControlIdPollingCursor(key: string, cursor: number): void { this.cursors.set(key, cursor); }
+  savePendingPhysicalTurn(turn: { key: string }): void { this.physical.set(turn.key, turn); }
+  removePendingPhysicalTurn(key: string): void { this.physical.delete(key); }
+  hasProcessedControlIdAccess(sourceId: string): boolean { return this.processed.has(sourceId); }
+}
+
 test("consulta direta diagnostica a catraca sem registrar frequência", async () => {
   let eventId = 10;
   let attendanceCalls = 0;
@@ -36,12 +47,15 @@ test("consulta direta diagnostica a catraca sem registrar frequência", async ()
   };
   const contacts: Array<{ observedTurn?: string }> = [];
   const logs: string[] = [];
+  const physicalEvents: string[] = [];
+  const store = new MemoryPollingStore();
   const service = new ControlIdPollingService(
     { registerControlIdUser: async () => { attendanceCalls += 1; } },
-    {},
+    store,
     () => settings,
     (_category, title) => logs.push(title),
     (contact) => contacts.push(contact),
+    async (_device, event) => { physicalEvents.push(event); return true; },
     fetchImpl
   );
 
@@ -54,6 +68,8 @@ test("consulta direta diagnostica a catraca sem registrar frequência", async ()
   assert.ok(requests.every((url) => url.includes("/login.fcgi") || url.includes("/load_objects.fcgi")));
   assert.equal(contacts.at(-1)?.observedTurn, "right");
   assert.ok(logs.some((title) => title.includes("evento físico observado")));
+  assert.deepEqual(physicalEvents, ["TURN_RIGHT"]);
+  assert.equal(store.physical.size, 0);
 });
 
 test("renova a sessão expirada da catraca", async () => {
@@ -68,7 +84,51 @@ test("renova a sessão expirada da catraca", async () => {
     if (loadCount === 1) return Response.json({ error: "Invalid session" });
     return Response.json({ access_events: [] });
   };
-  const service = new ControlIdPollingService({}, {}, () => settings, () => undefined, () => undefined, fetchImpl);
+  const service = new ControlIdPollingService(
+    {},
+    new MemoryPollingStore(),
+    () => settings,
+    () => undefined,
+    () => undefined,
+    async () => false,
+    fetchImpl
+  );
   await service.pollNow();
   assert.equal(loginCount, 2);
+});
+
+test("não avança o cursor quando a correlação falha e retoma todos os giros", async () => {
+  const store = new MemoryPollingStore();
+  store.cursors.set("192.168.1.189:80", 10);
+  const fetchImpl: typeof fetch = async (input) => {
+    if (String(input).includes("/login.fcgi")) return Response.json({ session: "session" });
+    return Response.json({ access_events: [
+      { id: 12, event: "catra", type: "TURN RIGHT", timestamp: 102 },
+      { id: 11, event: "catra", type: "TURN LEFT", timestamp: 101 }
+    ] });
+  };
+  const received: string[] = [];
+  let failOnce = true;
+  const service = new ControlIdPollingService(
+    {},
+    store,
+    () => settings,
+    () => undefined,
+    () => undefined,
+    async (_device, event) => {
+      received.push(event);
+      if (failOnce) {
+        failOnce = false;
+        throw new Error("falha simulada");
+      }
+      return true;
+    },
+    fetchImpl
+  );
+
+  await service.pollNow();
+  assert.equal(store.cursors.get("192.168.1.189:80"), 10);
+  await service.pollNow();
+  assert.equal(store.cursors.get("192.168.1.189:80"), 12);
+  assert.deepEqual(received, ["TURN_LEFT", "TURN_LEFT", "TURN_RIGHT"]);
 });

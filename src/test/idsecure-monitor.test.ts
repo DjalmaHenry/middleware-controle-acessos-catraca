@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { IdSecureMonitorService, IdSecureRequestTimeoutError, JsonRequester } from "../main/idsecure-monitor";
-import { Direction, PendingIdSecureAccess, Settings } from "../shared/types";
+import { Direction, PendingIdSecureAccess, PendingPhysicalTurn, Settings } from "../shared/types";
 
 const settings: Settings = {
   configured: true,
@@ -27,6 +27,7 @@ class MemoryStore {
   processed = new Set<string>();
   mappings = new Map<string, string>();
   pending = new Map<number, PendingIdSecureAccess>();
+  physical = new Map<string, PendingPhysicalTurn>();
   getIdSecureMonitorCursor(): number | undefined { return this.cursor; }
   saveIdSecureMonitorCursor(cursor: number): void { this.cursor = cursor; }
   getPendingIdSecureAccesses(): PendingIdSecureAccess[] { return [...this.pending.values()].map((item) => ({ ...item })); }
@@ -34,6 +35,8 @@ class MemoryStore {
     this.pending.set(access.idLog, { ...this.pending.get(access.idLog), ...access });
   }
   removePendingIdSecureAccess(idLog: number): void { this.pending.delete(idLog); }
+  getPendingPhysicalTurns(): PendingPhysicalTurn[] { return [...this.physical.values()].map((item) => ({ ...item })); }
+  removePendingPhysicalTurn(key: string): void { this.physical.delete(key); }
   hasProcessedControlIdAccess(id: string): boolean { return this.processed.has(id); }
   markProcessedControlIdAccess(id: string): void { this.processed.add(id); }
   saveControlIdMapping(userId: number | string, registration: string): void {
@@ -87,6 +90,8 @@ test("processa o monitor Enterprise por idLog e resolve a matrícula", async () 
   assert.equal(attendance.length, 0, "a primeira conexão deve apenas criar a linha de base");
   await service.pollNow();
 
+  assert.equal(attendance.length, 0, "o acesso autorizado deve aguardar o giro físico");
+  assert.equal(await service.handlePhysicalTurn("CATRACA 2", "TURN_RIGHT"), true);
   assert.deepEqual(attendance, [{
     userId: 1001440,
     direction: "S",
@@ -163,6 +168,113 @@ test("considera o timeout silencioso do long polling saudável após confirmar o
   assert.equal(store.cursor, 400);
 });
 
+test("envia o acesso pendente liberado somente após o giro da mesma catraca", async () => {
+  const store = new MemoryStore();
+  store.cursor = 500;
+  const requester: JsonRequester = async (url) => {
+    if (url.pathname === "/api/login/") return { status: 200, body: { accessToken: "token" } };
+    if (url.pathname === "/api/user/list") {
+      return { status: 200, body: { data: [{ idDevice: 1001440, name: "clelio", registration: "0054" }] } };
+    }
+    return { status: 200, body: { data: [{
+      idLog: 501,
+      eventCode: 8,
+      eventName: "Acesso pendente",
+      idUser: 1001440,
+      name: "clelio",
+      device: "CATRACA 2",
+      info: "Liberado",
+      time: "/Date(1785516279000-0300)/"
+    }] } };
+  };
+  const attendance: Array<{ direction?: Direction; sourceId?: string }> = [];
+  const service = new IdSecureMonitorService(
+    {
+      registerControlIdUser: async (_userId, direction, _occurredAt, _registration, sourceId) => {
+        attendance.push({ direction, sourceId });
+      }
+    },
+    store,
+    () => settings,
+    () => undefined,
+    () => undefined,
+    () => undefined,
+    requester
+  );
+
+  await service.pollNow();
+  assert.equal(attendance.length, 0);
+  assert.equal(store.pending.get(501)?.awaitingTurn, true);
+  assert.equal(await service.handlePhysicalTurn("CATRACA 1", "TURN_LEFT"), false);
+  assert.equal(await service.handlePhysicalTurn("CATRACA 2", "TURN_LEFT", "controlid:turn:catraca-2:18587"), true);
+  assert.deepEqual(attendance, [{ direction: "E", sourceId: "idsecure:log:501" }]);
+  assert.equal(store.pending.size, 0);
+  assert.equal(store.processed.has("controlid:turn:catraca-2:18587"), true);
+});
+
+test("correlaciona um giro persistido que chegou antes do monitor central", async () => {
+  const store = new MemoryStore();
+  store.cursor = 600;
+  store.physical.set("catraca-2:77", {
+    key: "catraca-2:77",
+    device: "CATRACA 2",
+    eventId: 77,
+    event: "TURN_RIGHT",
+    receivedAt: new Date().toISOString()
+  });
+  const requester: JsonRequester = async (url) => {
+    if (url.pathname === "/api/login/") return { status: 200, body: { accessToken: "token" } };
+    if (url.pathname === "/api/user/list") {
+      return { status: 200, body: { data: [{ idDevice: 9, name: "aluna", registration: "0099" }] } };
+    }
+    return { status: 200, body: { data: [{
+      idLog: 601, eventCode: 8, idUser: 9, name: "aluna", device: "CATRACA 2", info: "Liberado"
+    }] } };
+  };
+  const directions: Direction[] = [];
+  const service = new IdSecureMonitorService(
+    { registerControlIdUser: async (_id, direction) => { directions.push(direction ?? "E"); } },
+    store,
+    () => settings,
+    () => undefined,
+    () => undefined,
+    () => undefined,
+    requester
+  );
+
+  await service.pollNow();
+  assert.deepEqual(directions, ["S"]);
+  assert.equal(store.physical.size, 0);
+  assert.equal(store.pending.size, 0);
+  assert.equal(store.processed.has("controlid:turn:catraca-2:77"), true);
+});
+
+test("GIVE UP remove o acesso liberado sem registrar presença", async () => {
+  const store = new MemoryStore();
+  store.cursor = 700;
+  store.pending.set(700, {
+    idLog: 700,
+    userId: 15,
+    device: "CATRACA 1",
+    info: "Liberado",
+    receivedAt: new Date().toISOString(),
+    awaitingTurn: true,
+    attempts: 0
+  });
+  let attendance = 0;
+  const service = new IdSecureMonitorService(
+    { registerControlIdUser: async () => { attendance += 1; } },
+    store,
+    () => settings,
+    () => undefined
+  );
+
+  assert.equal(await service.handlePhysicalTurn("CATRACA 1", "GIVE_UP"), true);
+  assert.equal(attendance, 0);
+  assert.equal(store.pending.size, 0);
+  assert.equal(store.processed.has("idsecure:log:700"), true);
+});
+
 test("um usuário sem matrícula permanece salvo e não bloqueia os acessos seguintes", async () => {
   const store = new MemoryStore();
   store.cursor = 200;
@@ -192,6 +304,9 @@ test("um usuário sem matrícula permanece salvo e não bloqueia os acessos segu
 
   await service.pollNow();
   assert.equal(store.cursor, 202);
+  assert.equal(await service.handlePhysicalTurn("CATRACA", "TURN_LEFT"), false);
+  assert.equal(await service.handlePhysicalTurn("", "TURN_LEFT"), true);
+  assert.equal(await service.handlePhysicalTurn("", "TURN_LEFT"), true);
   assert.deepEqual(registrations, ["0099"]);
   assert.equal(store.pending.has(201), true);
   assert.equal(store.pending.has(202), false);

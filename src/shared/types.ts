@@ -103,9 +103,19 @@ export interface PendingIdSecureAccess {
   device?: string;
   info?: string;
   time?: string;
+  receivedAt?: string;
+  awaitingTurn?: boolean;
   attempts: number;
   lastAttemptAt?: string;
   lastError?: string;
+}
+
+export interface PendingPhysicalTurn {
+  key: string;
+  device: string;
+  eventId: number;
+  event: "TURN_LEFT" | "TURN_RIGHT" | "GIVE_UP";
+  receivedAt: string;
 }
 
 export interface AppState {

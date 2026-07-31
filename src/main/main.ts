@@ -65,7 +65,8 @@ async function bootstrap(): Promise<void> {
     store,
     () => store.getSettings(),
     integrationLog,
-    registerControlIdContact
+    registerControlIdContact,
+    (deviceName, event, sourceId) => idSecureMonitor.handlePhysicalTurn(deviceName, event, sourceId)
   );
   idSecureMonitor = new IdSecureMonitorService(
     accessService,

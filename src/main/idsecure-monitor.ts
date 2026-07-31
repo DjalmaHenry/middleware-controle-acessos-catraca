@@ -3,11 +3,14 @@ import { request as httpsRequest } from "node:https";
 import { AccessService } from "./access-service";
 import { IntegrationLogger } from "./integration-logger";
 import { JsonStore } from "./store";
-import { Direction, PendingIdSecureAccess, Settings } from "../shared/types";
+import { Direction, PendingIdSecureAccess, PendingPhysicalTurn, Settings } from "../shared/types";
 
 const POLL_INTERVAL_MS = 3_000;
 const REQUEST_TIMEOUT_MS = 15_000;
 const MAX_RESPONSE_BYTES = 5 * 1024 * 1024;
+const PHYSICAL_CONFIRMATION_WINDOW_MS = 60_000;
+
+export type PhysicalTurnEvent = "TURN_LEFT" | "TURN_RIGHT" | "GIVE_UP";
 
 interface IdSecureAccess {
   idLog: number | string;
@@ -56,6 +59,8 @@ interface MonitorStore {
   getPendingIdSecureAccesses(): PendingIdSecureAccess[];
   savePendingIdSecureAccess(access: PendingIdSecureAccess): void;
   removePendingIdSecureAccess(idLog: number): void;
+  getPendingPhysicalTurns(): PendingPhysicalTurn[];
+  removePendingPhysicalTurn(key: string): void;
   hasProcessedControlIdAccess(sourceId: string): boolean;
   markProcessedControlIdAccess(sourceId: string): void;
   saveControlIdMapping(userId: number | string, registration: string): void;
@@ -91,6 +96,7 @@ export class IdSecureMonitorService {
   private readonly users = new Map<string, IdSecureUser>();
   private lastError?: { message: string; loggedAt: number };
   private lastIdleLogAt = 0;
+  private processingPending = false;
 
   constructor(
     private readonly accessService: MonitorAccessService | AccessService,
@@ -122,6 +128,48 @@ export class IdSecureMonitorService {
     const token = await this.tokenFor(settings);
     await this.loadMonitorWithRetry(settings, token, this.store.getIdSecureMonitorCursor() ?? 0);
     this.online("Login e consulta do monitor confirmados.");
+  }
+
+  async handlePhysicalTurn(deviceName: string, event: PhysicalTurnEvent, physicalSourceId?: string): Promise<boolean> {
+    const now = Date.now();
+    const normalizedDevice = normalizeDeviceName(deviceName);
+    const pending = this.store.getPendingIdSecureAccesses()
+      .filter((access) => access.awaitingTurn)
+      .filter((access) => normalizeDeviceName(access.device) === normalizedDevice)
+      .filter((access) => !access.receivedAt || now - Date.parse(access.receivedAt) <= PHYSICAL_CONFIRMATION_WINDOW_MS)
+      .sort((left, right) => Date.parse(left.receivedAt ?? "") - Date.parse(right.receivedAt ?? "") || left.idLog - right.idLog)[0];
+    if (!pending) return false;
+
+    const sourceId = `idsecure:log:${pending.idLog}`;
+    if (event === "GIVE_UP") {
+      this.store.markProcessedControlIdAccess(sourceId);
+      this.store.removePendingIdSecureAccess(pending.idLog);
+      if (physicalSourceId) this.store.markProcessedControlIdAccess(physicalSourceId);
+      this.log("system", "Acesso liberado cancelado por desistência", {
+        idLog: pending.idLog,
+        idUser: pending.userId,
+        device: deviceName
+      });
+      return true;
+    }
+
+    const settings = this.getSettings();
+    const direction = directionForTurn(event, settings);
+    this.store.savePendingIdSecureAccess({
+      ...pending,
+      awaitingTurn: false,
+      info: direction === "E" ? "Entrada" : "Saída"
+    });
+    this.log("system", "Giro físico associado ao acesso do iDSecure", {
+      idLog: pending.idLog,
+      idUser: pending.userId,
+      device: deviceName,
+      turn: event,
+      direction
+    });
+    await this.processPending(settings);
+    if (physicalSourceId) this.store.markProcessedControlIdAccess(physicalSourceId);
+    return true;
   }
 
   async pollNow(): Promise<void> {
@@ -190,7 +238,9 @@ export class IdSecureMonitorService {
         occurredAt: parseIdSecureDate(access.time)
       });
 
-      if (Number(access.eventCode) !== 7 || !Number(access.idUser)) {
+      const code = Number(access.eventCode);
+      const awaitingTurn = code === 7 || (code === 8 && isReleased(access.info));
+      if ((code !== 7 && !awaitingTurn) || !Number(access.idUser)) {
         this.store.markProcessedControlIdAccess(sourceId);
         this.store.saveIdSecureMonitorCursor(idLog);
         continue;
@@ -203,68 +253,90 @@ export class IdSecureMonitorService {
         device: access.device,
         info: access.info,
         time: access.time,
+        receivedAt: new Date().toISOString(),
+        awaitingTurn,
         attempts: 0
       });
       this.store.saveIdSecureMonitorCursor(idLog);
+      if (awaitingTurn) await this.matchStoredPhysicalTurn(access.device);
     }
 
     await this.processPending(settings);
   }
 
+  private async matchStoredPhysicalTurn(deviceName: unknown): Promise<void> {
+    const normalizedDevice = normalizeDeviceName(deviceName);
+    const now = Date.now();
+    const turn = this.store.getPendingPhysicalTurns()
+      .filter((item) => normalizeDeviceName(item.device) === normalizedDevice)
+      .filter((item) => now - Date.parse(item.receivedAt) <= PHYSICAL_CONFIRMATION_WINDOW_MS)
+      .sort((left, right) => Date.parse(left.receivedAt) - Date.parse(right.receivedAt))[0];
+    if (!turn) return;
+    if (await this.handlePhysicalTurn(turn.device, turn.event, `controlid:turn:${turn.key}`)) {
+      this.store.removePendingPhysicalTurn(turn.key);
+    }
+  }
+
   private async processPending(settings: Settings): Promise<void> {
+    if (this.processingPending) return;
+    this.processingPending = true;
     const pendingAccesses = this.store.getPendingIdSecureAccesses()
+      .filter((access) => !access.awaitingTurn)
       .sort((left, right) => left.idLog - right.idLog);
-
-    for (const pending of pendingAccesses) {
-      const sourceId = `idsecure:log:${pending.idLog}`;
-      if (this.store.hasProcessedControlIdAccess(sourceId)) {
-        this.store.removePendingIdSecureAccess(pending.idLog);
-        continue;
-      }
-
-      try {
-        let registration = String(pending.registration ?? "").trim();
-        if (!registration) {
-          const user = await this.loadUserWithRetry(settings, pending.userId, pending.name);
-          registration = String(user.registration ?? "").trim();
-        }
-        if (!registration) {
-          throw new Error(`O usuário ${pending.userId} (${pending.name || "sem nome"}) não possui matrícula no iDSecure.`);
+    try {
+      for (const pending of pendingAccesses) {
+        const sourceId = `idsecure:log:${pending.idLog}`;
+        if (this.store.hasProcessedControlIdAccess(sourceId)) {
+          this.store.removePendingIdSecureAccess(pending.idLog);
+          continue;
         }
 
-        const direction = directionFor(pending.info, settings.direction);
-        this.store.savePendingIdSecureAccess({ ...pending, registration });
-        this.store.saveControlIdMapping(pending.userId, registration);
-        await this.accessService.registerControlIdUser(
-          pending.userId,
-          direction,
-          parseIdSecureDate(pending.time),
-          registration,
-          sourceId
-        );
-        this.onDirection(direction);
-        this.store.markProcessedControlIdAccess(sourceId);
-        this.store.removePendingIdSecureAccess(pending.idLog);
-      } catch (error) {
-        const attempts = pending.attempts + 1;
-        const message = error instanceof Error ? error.message : String(error);
-        this.store.savePendingIdSecureAccess({
-          ...pending,
-          attempts,
-          lastAttemptAt: new Date().toISOString(),
-          lastError: message
-        });
-        if (attempts === 1 || attempts % 10 === 0) {
-          this.log("error", "Acesso autorizado guardado para nova tentativa", {
-            idLog: pending.idLog,
-            idUser: pending.userId,
-            name: pending.name || null,
-            attempt: attempts,
-            message,
-            detail: "O evento permanece salvo no computador e não será descartado."
+        try {
+          let registration = String(pending.registration ?? "").trim();
+          if (!registration) {
+            const user = await this.loadUserWithRetry(settings, pending.userId, pending.name);
+            registration = String(user.registration ?? "").trim();
+          }
+          if (!registration) {
+            throw new Error(`O usuário ${pending.userId} (${pending.name || "sem nome"}) não possui matrícula no iDSecure.`);
+          }
+
+          const direction = directionFor(pending.info, settings.direction);
+          this.store.savePendingIdSecureAccess({ ...pending, registration });
+          this.store.saveControlIdMapping(pending.userId, registration);
+          await this.accessService.registerControlIdUser(
+            pending.userId,
+            direction,
+            parseIdSecureDate(pending.time),
+            registration,
+            sourceId
+          );
+          this.onDirection(direction);
+          this.store.markProcessedControlIdAccess(sourceId);
+          this.store.removePendingIdSecureAccess(pending.idLog);
+        } catch (error) {
+          const attempts = pending.attempts + 1;
+          const message = error instanceof Error ? error.message : String(error);
+          this.store.savePendingIdSecureAccess({
+            ...pending,
+            attempts,
+            lastAttemptAt: new Date().toISOString(),
+            lastError: message
           });
+          if (attempts === 1 || attempts % 10 === 0) {
+            this.log("error", "Acesso autorizado guardado para nova tentativa", {
+              idLog: pending.idLog,
+              idUser: pending.userId,
+              name: pending.name || null,
+              attempt: attempts,
+              message,
+              detail: "O evento permanece salvo no computador e não será descartado."
+            });
+          }
         }
       }
+    } finally {
+      this.processingPending = false;
     }
   }
 
@@ -536,6 +608,19 @@ function directionFor(info: unknown, fallback: Direction): Direction {
   if (normalized.includes("entrada")) return "E";
   if (normalized.includes("saida")) return "S";
   return fallback;
+}
+
+function directionForTurn(event: "TURN_LEFT" | "TURN_RIGHT", settings: Settings): Direction {
+  return event === "TURN_LEFT" ? settings.turnLeftDirection : settings.turnRightDirection;
+}
+
+function isReleased(value: unknown): boolean {
+  const normalized = String(value ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim().toLowerCase();
+  return normalized.includes("liberad");
+}
+
+function normalizeDeviceName(value: unknown): string {
+  return String(value ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-zA-Z0-9]/g, "").toLowerCase();
 }
 
 function parseIdSecureDate(value: unknown): string {

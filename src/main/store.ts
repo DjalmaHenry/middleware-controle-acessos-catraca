@@ -2,7 +2,7 @@ import { app, safeStorage } from "electron";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
-import { AccessRecord, ControlIdDeviceConfig, IntegrationLog, IntegrationLogCategory, PendingIdSecureAccess, Settings, Student, StudentSyncState } from "../shared/types";
+import { AccessRecord, ControlIdDeviceConfig, IntegrationLog, IntegrationLogCategory, PendingIdSecureAccess, PendingPhysicalTurn, Settings, Student, StudentSyncState } from "../shared/types";
 import { normalizeStudentSync } from "./student-cache-check";
 
 interface PersistedData {
@@ -24,6 +24,7 @@ interface PersistedData {
   controlIdPollingCursors: Record<string, number>;
   idSecureMonitorCursor?: number;
   pendingIdSecureAccesses: Record<string, PendingIdSecureAccess>;
+  pendingPhysicalTurns: Record<string, PendingPhysicalTurn>;
   processedControlIdAccesses: Record<string, string>;
 }
 
@@ -56,6 +57,7 @@ const defaults: PersistedData = {
   controlIdPollingCursors: {},
   idSecureMonitorCursor: undefined,
   pendingIdSecureAccesses: {},
+  pendingPhysicalTurns: {},
   processedControlIdAccesses: {}
 };
 
@@ -180,6 +182,19 @@ export class JsonStore {
     delete this.data.pendingIdSecureAccesses[String(idLog)];
     this.persist();
   }
+  getPendingPhysicalTurns(): PendingPhysicalTurn[] {
+    return Object.values(this.data.pendingPhysicalTurns).map((turn) => ({ ...turn }));
+  }
+  savePendingPhysicalTurn(turn: PendingPhysicalTurn): void {
+    this.data.pendingPhysicalTurns[turn.key] = { ...turn };
+    const entries = Object.entries(this.data.pendingPhysicalTurns);
+    if (entries.length > 200) this.data.pendingPhysicalTurns = Object.fromEntries(entries.slice(-150));
+    this.persist();
+  }
+  removePendingPhysicalTurn(key: string): void {
+    delete this.data.pendingPhysicalTurns[key];
+    this.persist();
+  }
   hasProcessedControlIdAccess(sourceId: string): boolean {
     return Boolean(this.data.processedControlIdAccesses[sourceId]);
   }
@@ -255,10 +270,29 @@ function normalizePersistedData(loaded: Partial<PersistedData>): PersistedData {
       ? loaded.idSecureMonitorCursor
       : undefined,
     pendingIdSecureAccesses: normalizePendingIdSecureAccesses(loaded.pendingIdSecureAccesses),
+    pendingPhysicalTurns: normalizePendingPhysicalTurns(loaded.pendingPhysicalTurns),
     processedControlIdAccesses: loaded.processedControlIdAccesses && typeof loaded.processedControlIdAccesses === "object"
       ? loaded.processedControlIdAccesses
       : {}
   };
+}
+
+function normalizePendingPhysicalTurns(value: unknown): Record<string, PendingPhysicalTurn> {
+  if (!value || typeof value !== "object") return {};
+  return Object.fromEntries(Object.entries(value).flatMap(([key, entry]) => {
+    if (!entry || typeof entry !== "object") return [];
+    const source = entry as Partial<PendingPhysicalTurn>;
+    const eventId = Number(source.eventId);
+    const event = source.event;
+    if (!source.device || !Number.isFinite(eventId) || !["TURN_LEFT", "TURN_RIGHT", "GIVE_UP"].includes(String(event))) return [];
+    return [[key, {
+      key,
+      device: String(source.device),
+      eventId,
+      event: event as PendingPhysicalTurn["event"],
+      receivedAt: typeof source.receivedAt === "string" ? source.receivedAt : new Date(0).toISOString()
+    } satisfies PendingPhysicalTurn]];
+  }));
 }
 
 function normalizePendingIdSecureAccesses(value: unknown): Record<string, PendingIdSecureAccess> {
@@ -277,6 +311,8 @@ function normalizePendingIdSecureAccesses(value: unknown): Record<string, Pendin
       device: typeof source.device === "string" ? source.device : undefined,
       info: typeof source.info === "string" ? source.info : undefined,
       time: typeof source.time === "string" ? source.time : undefined,
+      receivedAt: typeof source.receivedAt === "string" ? source.receivedAt : undefined,
+      awaitingTurn: source.awaitingTurn === true,
       attempts: Number.isFinite(Number(source.attempts)) ? Math.max(0, Number(source.attempts)) : 0,
       lastAttemptAt: typeof source.lastAttemptAt === "string" ? source.lastAttemptAt : undefined,
       lastError: typeof source.lastError === "string" ? source.lastError : undefined
