@@ -90,6 +90,7 @@ export class IdSecureMonitorService {
   private tokenExpiresAt = 0;
   private readonly users = new Map<string, IdSecureUser>();
   private lastError?: { message: string; loggedAt: number };
+  private lastIdleLogAt = 0;
 
   constructor(
     private readonly accessService: MonitorAccessService | AccessService,
@@ -119,7 +120,7 @@ export class IdSecureMonitorService {
     const settings = this.getSettings();
     this.validateSettings(settings);
     const token = await this.tokenFor(settings);
-    await this.loadMonitor(settings, token, this.store.getIdSecureMonitorCursor() ?? 0);
+    await this.loadMonitorWithRetry(settings, token, this.store.getIdSecureMonitorCursor() ?? 0);
     this.online("Login e consulta do monitor confirmados.");
   }
 
@@ -271,9 +272,24 @@ export class IdSecureMonitorService {
     try {
       return await this.loadMonitor(settings, token, cursor);
     } catch (error) {
-      if (!(error instanceof HttpError) || error.status !== 401) throw error;
-      this.clearToken();
-      return this.loadMonitor(settings, await this.tokenFor(settings), cursor);
+      if (error instanceof HttpError && error.status === 401) {
+        this.clearToken();
+        return this.loadMonitor(settings, await this.tokenFor(settings), cursor);
+      }
+      if (error instanceof IdSecureRequestTimeoutError) {
+        this.clearToken();
+        await this.tokenFor(settings);
+        const now = Date.now();
+        if (now - this.lastIdleLogAt >= 5 * 60_000) {
+          this.lastIdleLogAt = now;
+          this.log("system", "iDSecure conectado e aguardando um novo acesso", {
+            address: originFor(settings.idSecureBaseUrl),
+            detail: "O monitor usa uma conexão longa e não retornou eventos dentro de 15 segundos. O login de confirmação respondeu normalmente."
+          });
+        }
+        return [];
+      }
+      throw error;
     }
   }
 
@@ -460,7 +476,7 @@ export async function defaultJsonRequester(url: URL, options: JsonRequestOptions
       });
     });
     outgoing.setTimeout(options.timeoutMs ?? REQUEST_TIMEOUT_MS, () => {
-      outgoing.destroy(new Error(`Tempo limite ao acessar ${url.origin}.`));
+      outgoing.destroy(new IdSecureRequestTimeoutError(`Tempo limite ao acessar ${url.origin}.`));
     });
     outgoing.on("error", reject);
     if (body) outgoing.write(body);
@@ -473,6 +489,8 @@ class HttpError extends Error {
     super(message);
   }
 }
+
+export class IdSecureRequestTimeoutError extends Error {}
 
 function responseError(action: string, response: { status: number; body: Record<string, unknown> }): HttpError {
   return new HttpError(response.status, `${action} respondeu HTTP ${response.status}: ${errorDetail(response.body.error ?? response.body)}`);

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { IdSecureMonitorService, JsonRequester } from "../main/idsecure-monitor";
+import { IdSecureMonitorService, IdSecureRequestTimeoutError, JsonRequester } from "../main/idsecure-monitor";
 import { Direction, PendingIdSecureAccess, Settings } from "../shared/types";
 
 const settings: Settings = {
@@ -131,6 +131,36 @@ test("refaz o login quando o Bearer expira", async () => {
   await service.pollNow();
   assert.equal(loginCount, 2);
   assert.equal(store.cursor, 0);
+});
+
+test("considera o timeout silencioso do long polling saudável após confirmar o login", async () => {
+  const store = new MemoryStore();
+  store.cursor = 400;
+  let loginCount = 0;
+  const statuses: string[] = [];
+  const errors: string[] = [];
+  const requester: JsonRequester = async (url) => {
+    if (url.pathname === "/api/login/") {
+      loginCount += 1;
+      return { status: 200, body: { accessToken: `token-${loginCount}` } };
+    }
+    throw new IdSecureRequestTimeoutError("monitor sem novos eventos");
+  };
+  const service = new IdSecureMonitorService(
+    { registerControlIdUser: async () => undefined },
+    store,
+    () => settings,
+    (category, title) => { if (category === "error") errors.push(title); },
+    (status) => statuses.push(status.status),
+    () => undefined,
+    requester
+  );
+
+  await service.pollNow();
+  assert.equal(loginCount, 2, "deve confirmar que o painel continua alcançável e autenticando");
+  assert.equal(statuses.at(-1), "online");
+  assert.deepEqual(errors, []);
+  assert.equal(store.cursor, 400);
 });
 
 test("um usuário sem matrícula permanece salvo e não bloqueia os acessos seguintes", async () => {
