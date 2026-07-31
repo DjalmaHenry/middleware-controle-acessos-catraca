@@ -103,6 +103,8 @@ test("processa o monitor Enterprise por idLog e resolve a matrícula", async () 
   assert.equal(store.mappings.get("1001440"), "0054");
   assert.deepEqual(directions, ["S"]);
   assert.ok(logs.some((entry) => entry.title.includes("Não identificado")));
+  assert.ok(logs.some((entry) => entry.title === "Ponte ID → iDSecure /api/user/list"));
+  assert.ok(logs.some((entry) => entry.title === "iDSecure → Ponte ID /api/user/list"));
   const userRequest = requests.find((url) => url.pathname === "/api/user/list");
   assert.equal(userRequest?.searchParams.get("filterCol"), "name");
   assert.equal(userRequest?.searchParams.get("search[value]"), "clelio");

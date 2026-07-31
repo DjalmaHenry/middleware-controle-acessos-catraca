@@ -33,11 +33,12 @@ test("deduplica chamadas simultâneas pelo idLog do iDSecure", async () => {
       await new Promise((resolve) => setTimeout(resolve, 10));
     }
   };
+  const logs: Array<{ title: string; payload?: unknown }> = [];
   const service = new AccessService(
     store as unknown as JsonStore,
     activeSoft as unknown as ActiveSoftClient,
     () => undefined,
-    () => undefined
+    (_category, title, payload) => logs.push({ title, payload })
   );
 
   await Promise.all([
@@ -48,6 +49,7 @@ test("deduplica chamadas simultâneas pelo idLog do iDSecure", async () => {
   assert.equal(sends, 1);
   assert.equal(store.recent[0].id, "idsecure:log:175324");
   assert.equal(store.recent[0].status, "sent");
+  assert.ok(logs.some((entry) => entry.title === "Matrícula iDSecure associada ao aluno ActiveSoft"));
 });
 
 test("mantém na fila após falha e não reenvia depois de concluído", async () => {

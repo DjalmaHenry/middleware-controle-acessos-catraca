@@ -58,6 +58,12 @@ export class AccessService {
       this.log("error", "Não foi possível associar o acesso a um aluno", { user_id: userId, registration: mappedRegistration, message });
       throw new Error(message);
     }
+    this.log("system", "Matrícula iDSecure associada ao aluno ActiveSoft", {
+      userId,
+      registration: mappedRegistration,
+      studentId: student.id,
+      studentName: student.nome
+    });
     return this.register(student.id, direction, occurredAt, sourceId);
   }
 

@@ -97,8 +97,8 @@ function renderControlIdStatus(state) {
 }
 
 const consoleLabels = {
-  "device-in": "CONTROL ID → APP",
-  "device-out": "APP → CONTROL ID",
+  "device-in": "DISPOSITIVO → APP",
+  "device-out": "APP → DISPOSITIVO",
   "api-out": "APP → API",
   "api-in": "API → APP",
   system: "SISTEMA",

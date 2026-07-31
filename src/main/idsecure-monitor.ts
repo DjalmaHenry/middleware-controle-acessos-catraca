@@ -384,7 +384,14 @@ export class IdSecureMonitorService {
 
   private async loadUserWithRetry(settings: Settings, userId: number, name?: string): Promise<IdSecureUser> {
     const cached = this.users.get(String(userId));
-    if (cached) return cached;
+    if (cached) {
+      this.log("system", "Cadastro iDSecure reutilizado", {
+        idUser: userId,
+        name: cached.name || name || null,
+        registration: cached.registration ?? null
+      });
+      return cached;
+    }
     let token = await this.tokenFor(settings);
     try {
       return await this.loadUser(settings, token, userId, name);
@@ -438,9 +445,21 @@ export class IdSecureMonitorService {
     params.set("order[0][column]", filterColumn === "name" ? "2" : "1");
     params.set("order[0][dir]", "asc");
     url.search = params.toString();
+    this.log("device-out", "Ponte ID → iDSecure /api/user/list", {
+      filter: filterColumn,
+      search
+    });
     const result = await this.authorizedRequest(url, token, { method: "POST" });
     const payload = result as UserResponse;
     if (!Array.isArray(payload.data)) throw new Error("O iDSecure retornou uma consulta de pessoas sem a lista data.");
+    this.log("device-in", "iDSecure → Ponte ID /api/user/list", {
+      results: payload.data.length,
+      people: payload.data.map((user) => ({
+        idUser: Number(user.idDevice ?? user.id) || null,
+        name: user.name || null,
+        registration: user.registration ?? null
+      }))
+    });
     return payload.data;
   }
 
