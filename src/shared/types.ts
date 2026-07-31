@@ -7,7 +7,10 @@ export interface Settings {
   listenerPort: number;
   autoStart: boolean;
   direction: Direction;
+  turnLeftDirection: Direction;
+  turnRightDirection: Direction;
   demoMode: boolean;
+  developerMode: boolean;
 }
 
 export interface Student {
@@ -30,6 +33,39 @@ export interface AccessRecord {
   message?: string;
 }
 
+export type IntegrationLogCategory =
+  | "device-in"
+  | "device-out"
+  | "api-out"
+  | "api-in"
+  | "system"
+  | "error";
+
+export interface IntegrationLog {
+  id: string;
+  timestamp: string;
+  category: IntegrationLogCategory;
+  title: string;
+  payload?: unknown;
+}
+
+export type InstallationCheckStatus = "pass" | "warning" | "fail" | "running";
+
+export interface InstallationCheck {
+  id: string;
+  title: string;
+  status: InstallationCheckStatus;
+  blocking: boolean;
+  detail: string;
+  resolution?: string;
+}
+
+export interface InstallationReport {
+  checkedAt: string;
+  ready: boolean;
+  checks: InstallationCheck[];
+}
+
 export interface AppState {
   settings: Omit<Settings, "activeSoftToken"> & { tokenConfigured: boolean };
   listener: { running: boolean; port: number; error?: string };
@@ -37,6 +73,11 @@ export interface AppState {
   students: Student[];
   recentAccesses: AccessRecord[];
   pendingCount: number;
+  integrationLogs: IntegrationLog[];
+  networkAddresses: string[];
+  controlIdMappingCount: number;
+  platform: NodeJS.Platform;
+  installationReport?: InstallationReport;
 }
 
 export interface SaveSettingsInput {
@@ -45,5 +86,8 @@ export interface SaveSettingsInput {
   listenerPort: number;
   autoStart: boolean;
   direction: Direction;
+  turnLeftDirection: Direction;
+  turnRightDirection: Direction;
   demoMode: boolean;
+  developerMode: boolean;
 }

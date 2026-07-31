@@ -1,4 +1,4 @@
-import { AppState, SaveSettingsInput } from "../shared/types";
+import { AppState, InstallationReport, SaveSettingsInput } from "../shared/types";
 
 declare global {
   interface Window {
@@ -7,7 +7,11 @@ declare global {
       saveSettings(settings: SaveSettingsInput): Promise<AppState>;
       synchronize(): Promise<void>;
       testConnection(): Promise<boolean>;
+      getAccessPhoto(accessId: string): Promise<string | null>;
       simulateAccess(studentId: number): Promise<void>;
+      clearLogs(): Promise<void>;
+      prepareInstallation(): Promise<InstallationReport>;
+      validateInstallation(): Promise<InstallationReport>;
       openExternal(url: string): Promise<void>;
       onStateChanged(callback: (state: AppState) => void): () => void;
     };

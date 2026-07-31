@@ -4,18 +4,21 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' https: data:; style-src 'self'; script-src 'self'; connect-src 'self'">
-  <title>Ponte Escolar</title>
+  <title>Ponte ID</title>
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
   <aside class="sidebar">
-    <div class="brand"><span class="brand-mark">PE</span><div><strong>Ponte Escolar</strong><small>Controle de acesso</small></div></div>
+    <div class="brand"><img class="brand-logo" src="assets/ponte-id-logo.png" alt=""><div><strong>Ponte ID</strong><small>Integração de acessos</small></div></div>
     <nav>
       <button class="nav-item active" data-view="dashboard"><span>●</span> Monitor</button>
       <button class="nav-item" data-view="history"><span>≡</span> Histórico</button>
+      <button class="nav-item developer-only" data-view="console"><span>&gt;_</span> Console</button>
+      <button class="nav-item developer-only" data-view="installation"><span>✓</span> Instalação</button>
       <button class="nav-item" data-view="settings"><span>⚙</span> Configurações</button>
     </nav>
     <div class="sidebar-status"><span id="resident-dot" class="dot ok"></span><div><strong>Aplicativo ativo</strong><small>Funcionando em segundo plano</small></div></div>
+    <div class="built-by">Built by <strong>Difinity Labs</strong></div>
   </aside>
 
   <main>
@@ -41,13 +44,111 @@
 
     <section id="history" class="view"><div class="table-wrap"><table><thead><tr><th>Aluno</th><th>Matrícula</th><th>Data e hora</th><th>Movimento</th><th>Status</th></tr></thead><tbody id="history-body"></tbody></table></div></section>
 
+    <section id="console" class="view developer-only">
+      <div class="console-toolbar">
+        <div class="console-legend">
+          <span class="legend device-in">Catraca → App</span>
+          <span class="legend device-out">App → Catraca</span>
+          <span class="legend api-out">App → ActiveSoft</span>
+          <span class="legend api-in">ActiveSoft → App</span>
+          <span class="legend error">Erros</span>
+        </div>
+        <div class="console-actions">
+          <label class="compact-check"><input id="console-autoscroll" type="checkbox" checked> Rolar automaticamente</label>
+          <button id="clear-console" class="secondary" type="button">Limpar</button>
+        </div>
+      </div>
+      <div id="console-output" class="console-output"></div>
+    </section>
+
+    <section id="installation" class="view developer-only">
+      <div class="installation-control">
+        <div>
+          <span id="installation-status-badge" class="installation-status pending">Não validado</span>
+          <h2 id="installation-status-title">Prepare e valide este computador</h2>
+          <p id="installation-status-text">A preparação aplica somente configurações locais seguras. A validação informa exatamente o que ainda impede o uso em produção.</p>
+        </div>
+        <div class="installation-buttons">
+          <button id="prepare-installation" class="primary" type="button">Preparar este computador</button>
+          <button id="validate-installation" class="secondary" type="button">Validar instalação</button>
+        </div>
+      </div>
+      <div id="installation-progress" class="installation-progress" hidden></div>
+      <div id="installation-results" class="installation-results">
+        <div class="installation-placeholder">Execute a validação para obter o diagnóstico deste computador.</div>
+      </div>
+      <div class="installation-layout">
+        <aside class="installation-summary">
+          <h2>Diagnóstico local</h2>
+          <dl>
+            <div><dt>Porta do receptor</dt><dd id="guide-port">8787</dd></div>
+            <div><dt>Endereços deste PC</dt><dd id="guide-addresses">Detectando...</dd></div>
+            <div><dt>Associações conhecidas</dt><dd id="guide-mappings">0 matrículas</dd></div>
+          </dl>
+          <div class="guide-warning"><strong>Não altere o servidor online</strong><p>Em instalações iDSecure Enterprise, o reconhecimento e a autorização devem continuar apontando para o servidor iDSecure.</p></div>
+        </aside>
+        <div class="installation-steps">
+          <h2>Procedimento completo de implantação</h2>
+          <ol class="step-list">
+            <li><span>1</span><div><strong>Levantar a instalação existente do iDSecure</strong><em>Manual, sem alterações</em><p>No computador servidor, abra o iDSecure pelo atalho ou acesse <code>https://localhost:33443</code>. Anote a versão exibida, o IP do servidor e confirme a licença Enterprise. Entre em <b>Acesso → Dispositivos</b> e registre nome, IP, serial, modelo e área de cada uma das 10 catracas. Use o botão de teste do próprio iDSecure para confirmar que todas aparecem online.</p><p>Não edite <code>online_client</code>, modo online ou identificação local. Esses parâmetros mantêm o reconhecimento facial funcionando no servidor atual.</p></div></li>
+            <li><span>2</span><div><strong>Conectar e estabilizar a rede do Windows</strong><em>Validação automática, correção manual</em><p>Use Ethernet, não Wi-Fi, no computador que ficará ligado. Pressione <b>Win + R</b>, execute <code>cmd</code> e rode <code>ipconfig /all</code>. Anote IPv4, gateway e Endereço Físico da placa Ethernet.</p><p>No roteador/firewall da escola, crie uma reserva DHCP associando esse Endereço Físico ao IPv4 mostrado nesta tela. Depois execute <code>ipconfig /release</code> e <code>ipconfig /renew</code> fora do horário de uso e confirme que o IP permaneceu igual.</p></div></li>
+            <li><span>3</span><div><strong>Preparar o Windows automaticamente</strong><em>Automático</em><p>Clique em <b>Preparar este computador</b> e aceite o UAC. O aplicativo ativa o início após login, reinicia o receptor e cria a regra <code>Ponte ID - Control iD</code> no Firewall: entrada TCP, perfil privado, porta configurada e origem limitada à sub-rede local.</p><p>Se o UAC for cancelado, execute novamente. Em correção manual, abra Terminal como Administrador e use:</p><code id="firewall-command">netsh advfirewall firewall add rule name="Ponte ID - Control iD" dir=in action=allow protocol=TCP localport=8787 profile=private remoteip=localsubnet</code></div></li>
+            <li><span>4</span><div><strong>Configurar e testar a ActiveSoft</strong><em>Sem gravação durante validação</em><p>Em <b>Configurações</b>, informe URL e token, desative Modo demonstração e salve. Clique em <b>Sincronizar</b>. A validação executa somente leitura de um aluno e <code>OPTIONS</code> no endpoint de frequência; nenhuma presença é criada.</p><p>O resultado deve mostrar alunos sincronizados, autorização de frequência e fotos disponíveis. Em caso de <code>401</code>, corrija o token; em <code>403</code>, libere permissões; em timeout, revise internet, proxy, DNS e antivírus.</p></div></li>
+            <li><span>5</span><div><strong>Inspecionar o Monitor antes de alterá-lo</strong><em>Manual e obrigatório</em><p>Acesse a interface web de uma catraca usando o IP listado no iDSecure. Consulte a configuração <code>monitor</code> e anote <code>hostname</code>, <code>port</code> e <code>path</code>. Se ela já aponta para o iDSecure, não substitua sem confirmação da Control iD, pois pode existir apenas um destino.</p><p>A alternativa preferencial nesse caso é ler os acessos centralizados no iDSecure. Só configure envio direto ao Ponte ID depois de confirmar que o destino atual pode ser substituído ou encaminhado.</p></div></li>
+            <li><span>6</span><div><strong>Configurar o Monitor autorizado</strong><em>Manual, por dispositivo</em><p>Quando autorizado, configure <code>hostname</code> com o IPv4 mostrado nesta tela, <code>port</code> com a porta do receptor e <code>path=api/notifications</code>. Defina <code>inform_access_event_id=1</code>. Repita nas catracas relevantes e reinicie somente uma por vez.</p><p>Faça uma passagem. O Console deve receber primeiro <code>/api/notifications/dao</code> com <code>access_logs</code> e depois <code>/api/notifications/catra_event</code>. A validação marcará Comunicação da catraca como concluída.</p></div></li>
+            <li><span>7</span><div><strong>Vincular usuários pela matrícula</strong><em>Importação ou sincronização</em><p>No iDSecure, abra um aluno e confirme que o campo Matrícula corresponde a <code>registration</code> e contém exatamente a matrícula ActiveSoft. Não altere a face nem use o ID mutável do banco.</p><p>Se estiver vazio, exporte os usuários, preencha a matrícula a partir da ActiveSoft e importe pelo recurso oficial do iDSecure. Faça primeiro com um aluno de homologação. Após receber um objeto <code>users</code>, o contador de associações desta tela deve aumentar.</p></div></li>
+            <li><span>8</span><div><strong>Calibrar entrada e saída</strong><em>Teste físico</em><p>Selecione um aluno de homologação. Faça uma entrada e observe no Console se o giro recebido foi <code>TURN LEFT</code> ou <code>TURN RIGHT</code>. Repita saindo. Em <b>Configurações → Recepção da catraca</b>, atribua Entrada e Saída aos sentidos observados.</p><p>Catracas montadas ao contrário podem exigir configuração por dispositivo; registre qualquer divergência antes de liberar produção.</p></div></li>
+            <li><span>9</span><div><strong>Validar inicialização e operação offline</strong><em>Teste final</em><p>Feche a janela e confirme o ícone na bandeja. Reinicie o Windows, efetue login e aguarde dois minutos. Abra o aplicativo pela bandeja e clique em <b>Validar instalação</b>.</p><p>Desconecte a internet, faça uma passagem autorizada e confirme item Na fila. Reconecte e aguarde até 30 segundos; o status deve mudar para Enviado. O reconhecimento da catraca deve continuar sob contingência do iDSecure.</p></div></li>
+            <li><span>10</span><div><strong>Decidir execução antes do login</strong><em>Decisão de infraestrutura</em><p>O modo atual inicia após o login. Se a escola mantém uma conta operacional logada, isso atende. Se o servidor reinicia sem login automático, o receptor precisa ser empacotado como Serviço do Windows antes da implantação definitiva; a interface continuará separada na bandeja.</p></div></li>
+          </ol>
+        </div>
+      </div>
+    </section>
+
     <section id="settings" class="view">
       <form id="settings-form" class="settings-form">
-        <div class="form-section"><h2>ActiveSoft SIGA</h2><p>Credenciais usadas para sincronizar alunos e registrar frequência.</p><label>Endereço da API<input id="api-url" type="url" required placeholder="https://siga01.activesoft.com.br"></label><label>Token de acesso<input id="api-token" type="password" placeholder="Deixe vazio para manter o token atual"><small id="token-hint"></small></label></div>
-        <div class="form-section"><h2>Recepção da catraca</h2><p>A catraca deve alcançar este computador pela rede local.</p><div class="form-row"><label>Porta do receptor<input id="listener-port" type="number" min="1024" max="65535" required></label><label>Movimento padrão<select id="direction"><option value="E">Entrada</option><option value="S">Saída</option></select></label></div></div>
-        <div class="form-section"><h2>Funcionamento</h2><label class="switch-row"><span><strong>Iniciar com o Windows</strong><small>Mantém a integração ativa após ligar o computador.</small></span><input id="auto-start" type="checkbox"><i></i></label><label class="switch-row"><span><strong>Modo demonstração</strong><small>Não envia dados reais para a ActiveSoft.</small></span><input id="demo-mode" type="checkbox"><i></i></label></div>
+        <div class="form-section"><h2>ActiveSoft SIGA</h2><p>Credenciais usadas para sincronizar alunos e registrar frequência.</p><label>Endereço da API<input id="api-url" type="url" required placeholder="https://siga01.activesoft.com.br"></label><label>Token de acesso<input id="api-token" type="password" placeholder="Deixe vazio para manter o token atual"><small id="token-hint"></small><a id="token-guide-link" class="field-help-link" href="#token-guide">Como criar um novo token ActiveSoft</a></label></div>
+        <div class="form-section"><h2>Recepção da catraca</h2><p>A catraca deve alcançar este computador pela rede local.</p><div class="form-row"><label>Porta do receptor<input id="listener-port" type="number" min="1024" max="65535" required></label><label>Movimento sem direção conhecida<select id="direction"><option value="E">Entrada</option><option value="S">Saída</option></select></label></div><div class="form-row"><label>Giro à esquerda<select id="turn-left-direction"><option value="E">Entrada</option><option value="S">Saída</option></select></label><label>Giro à direita<select id="turn-right-direction"><option value="S">Saída</option><option value="E">Entrada</option></select></label></div><div class="mapping-note"><strong>Chave de identificação</strong><p>A matrícula da ActiveSoft é comparada ao campo <code>registration</code> da Control iD. O número interno <code>user_id</code> é usado apenas para localizar essa matrícula.</p></div></div>
+        <div class="form-section"><h2>Funcionamento</h2><label class="switch-row"><span><strong>Iniciar com o Windows</strong><small>Mantém a integração ativa após ligar o computador.</small></span><input id="auto-start" type="checkbox"><i></i></label><label class="switch-row"><span><strong>Modo demonstração</strong><small>Não envia dados reais para a ActiveSoft.</small></span><input id="demo-mode" type="checkbox"><i></i></label><label class="switch-row"><span><strong>Modo desenvolvedor</strong><small>Exibe Console e guia técnico de instalação.</small></span><input id="developer-mode" type="checkbox"><i></i></label></div>
         <div id="form-message" class="form-message"></div><button class="primary save" type="submit">Salvar configurações</button>
       </form>
+    </section>
+
+    <section id="token-guide" class="view">
+      <div class="token-guide">
+        <div class="token-guide-intro">
+          <a id="token-guide-back" class="back-link" href="#settings">Voltar às configurações</a>
+          <span class="guide-kicker">Credencial da integração</span>
+          <h2>Criar um token para o Ponte ID</h2>
+          <p>Gere uma credencial exclusiva no portal da ActiveSoft, com validade de um ano e somente as permissões necessárias para a integração.</p>
+          <button id="open-token-portal" class="primary" type="button">Abrir portal ActiveSoft</button>
+          <p id="token-portal-message" class="token-portal-message"></p>
+        </div>
+
+        <div class="token-guide-content">
+          <ol class="token-steps">
+            <li><span>1</span><div><strong>Entre no portal da ActiveSoft</strong><p>Acesse o portal usado pela escola e faça login com um usuário autorizado a gerar tokens de integração.</p></div></li>
+            <li><span>2</span><div><strong>Abra a geração de token</strong><p>Acesse a opção de geração de token. O botão desta página abre diretamente o endereço <code>/gerar_token/</code> no portal configurado.</p></div></li>
+            <li><span>3</span><div><strong>Identifique a credencial</strong><p>Quando houver um campo de nome ou descrição, use <b>Ponte ID - Control iD</b> para que o token possa ser localizado e revogado individualmente.</p></div></li>
+            <li><span>4</span><div><strong>Defina a expiração para um ano</strong><p>Escolha a maior validade autorizada pela escola, com expiração de <b>1 ano</b>. Registre a data de vencimento para renovar o token antes da interrupção do serviço.</p></div></li>
+            <li><span>5</span><div><strong>Marque as cinco permissões</strong><p>Selecione exatamente os itens apresentados no checklist abaixo.</p></div></li>
+            <li><span>6</span><div><strong>Gere e configure</strong><p>Confirme os termos, gere o token e informe-o em <b>Configurações → Token de acesso</b>. Depois salve e execute a sincronização.</p></div></li>
+          </ol>
+
+          <section class="permission-checklist" aria-labelledby="permission-title">
+            <div><span class="check-symbol">✓</span><h3 id="permission-title">Permissões necessárias</h3></div>
+            <ul>
+              <li>Permissão para realizar alteração em dados</li>
+              <li>Permissão para registrar ou consultar frequência de alunos</li>
+              <li>Permissão para acesso a dados cadastrais</li>
+              <li>Permissão para acesso a dados do detalhe da enturmação</li>
+              <li>Permissão para acesso a parâmetros do sistema</li>
+            </ul>
+          </section>
+
+          <div class="token-security-note"><strong>Cuide desta credencial</strong><p>Não envie o token por e-mail ou aplicativos de mensagem. No Ponte ID ele é armazenado usando a proteção de credenciais disponível no Windows.</p></div>
+        </div>
+      </div>
     </section>
   </main>
   <script src="renderer.js"></script>

@@ -26,6 +26,6 @@ jobs:
       - name: Disponibilizar instalador
         uses: actions/upload-artifact@v4
         with:
-          name: ponte-escolar-windows
+          name: ponte-id-windows
           path: release/*Setup*.exe
           if-no-files-found: error

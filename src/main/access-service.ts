@@ -2,13 +2,15 @@ import { randomUUID } from "node:crypto";
 import { ActiveSoftClient } from "./active-soft";
 import { JsonStore } from "./store";
 import { AccessRecord, Direction, Student } from "../shared/types";
+import { IntegrationLogger } from "./integration-logger";
 
 export class AccessService {
   private processing = false;
   constructor(
     private readonly store: JsonStore,
     private readonly activeSoft: ActiveSoftClient,
-    private readonly onChange: () => void
+    private readonly onChange: () => void,
+    private readonly log: IntegrationLogger
   ) {}
 
   async register(studentId: number, direction?: Direction, occurredAt = new Date().toISOString()): Promise<AccessRecord> {
@@ -22,6 +24,27 @@ export class AccessService {
     this.store.addAccess(record);
     this.onChange();
     return this.send(record);
+  }
+
+  async registerControlIdUser(
+    userId: number,
+    direction?: Direction,
+    occurredAt = new Date().toISOString(),
+    registration?: string
+  ): Promise<AccessRecord> {
+    const mappedRegistration = registration || this.store.getControlIdRegistration(userId);
+    const students = this.store.getStudents();
+    const student = mappedRegistration
+      ? students.find((item) => normalizeRegistration(item.matricula) === normalizeRegistration(mappedRegistration))
+      : students.find((item) => item.id === userId);
+    if (!student) {
+      const message = mappedRegistration
+        ? `Matrícula ${mappedRegistration} do usuário Control iD ${userId} não encontrada na ActiveSoft.`
+        : `Usuário Control iD ${userId} sem matrícula associada. Cadastre a matrícula no campo registration do iDSecure.`;
+      this.log("error", "Não foi possível associar o acesso a um aluno", { user_id: userId, registration: mappedRegistration, message });
+      throw new Error(message);
+    }
+    return this.register(student.id, direction, occurredAt);
   }
 
   async retryQueue(): Promise<void> {
@@ -47,8 +70,16 @@ export class AccessService {
 
   private async send(record: AccessRecord): Promise<AccessRecord> {
     try {
-      if (this.store.getSettings().demoMode) await new Promise((resolve) => setTimeout(resolve, 350));
-      else await this.activeSoft.markAttendance(record.matricula, record.direction, record.occurredAt);
+      if (this.store.getSettings().demoMode) {
+        this.log("api-out", "SIMULAÇÃO POST ActiveSoft /api/v0/marcar_frequencia_aluno/", {
+          data_hora: record.occurredAt,
+          tipo_entrada_saida: record.direction,
+          matricula: record.matricula,
+          comentario: "Catraca Control iD"
+        });
+        await new Promise((resolve) => setTimeout(resolve, 350));
+        this.log("api-in", "SIMULAÇÃO 201 ActiveSoft - frequência registrada", { ok: true });
+      } else await this.activeSoft.markAttendance(record.matricula, record.direction, record.occurredAt);
       const sent = { ...record, status: "sent" as const, message: undefined };
       this.store.dequeue(record.id);
       this.store.addAccess(sent);
@@ -62,4 +93,8 @@ export class AccessService {
       return queued;
     }
   }
+}
+
+function normalizeRegistration(value: string): string {
+  return value.trim().replace(/^0+(?=\d)/, "");
 }
