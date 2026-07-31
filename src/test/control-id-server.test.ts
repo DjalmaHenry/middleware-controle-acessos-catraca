@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { ControlIdServer } from "../main/control-id-server";
+import { ControlIdDeviceContact } from "../shared/types";
 
 test("registra somente depois da confirmação de giro", async () => {
   const registered: Array<{ studentId: number; direction: string }> = [];
+  const contacts: ControlIdDeviceContact[] = [];
   const service = {
     registerControlIdUser: async (studentId: number, direction: string) => {
       registered.push({ studentId, direction });
@@ -19,7 +21,13 @@ test("registra somente depois da confirmação de giro", async () => {
     removePendingControlIdAccess: (id: string) => pending.delete(id)
   };
   const settings = () => ({ turnLeftDirection: "E", turnRightDirection: "S", direction: "E" });
-  const server = new ControlIdServer(service as never, store as never, settings as never, () => undefined);
+  const server = new ControlIdServer(
+    service as never,
+    store as never,
+    settings as never,
+    () => undefined,
+    (contact) => contacts.push(contact)
+  );
   const port = await server.start(0);
   try {
     await fetch(`http://127.0.0.1:${port}/api/notifications/dao`, {
@@ -32,6 +40,7 @@ test("registra somente depois da confirmação de giro", async () => {
       body: JSON.stringify({ event: { type: 7, name: "TURN LEFT", time: 1700000001 }, access_event_id: 55 })
     });
     assert.deepEqual(registered, [{ studentId: 101, direction: "E" }]);
+    assert.equal(contacts.some((contact) => contact.observedTurn === "left"), true);
   } finally { await server.stop(); }
 });
 

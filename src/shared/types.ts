@@ -72,6 +72,7 @@ export interface ControlIdDeviceContact {
   path: string;
   remoteAddress?: string;
   deviceId?: string;
+  observedTurn?: "left" | "right";
 }
 
 export interface AppState {

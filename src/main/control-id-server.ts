@@ -46,12 +46,16 @@ export class ControlIdServer {
           || stringValue(parsedBody.device_id)
           || stringValue((parsedBody.device as Record<string, unknown> | undefined)?.id);
         const remoteAddress = normalizeRemoteAddress(request.socket.remoteAddress);
+        const observedTurn = url.pathname === "/api/notifications/catra_event"
+          ? turnFromEventName(String((parsedBody.event as Record<string, unknown> | undefined)?.name ?? ""))
+          : undefined;
         this.onDeviceContact({
           key: deviceId ? `device:${deviceId}` : `address:${remoteAddress ?? "unknown"}`,
           lastSeenAt: new Date().toISOString(),
           path: url.pathname,
           remoteAddress,
-          deviceId
+          deviceId,
+          observedTurn
         });
       }
       this.log("device-in", `${request.method} Control iD ${url.pathname}`, {
@@ -183,4 +187,11 @@ function isControlIdPath(pathname: string): boolean {
 function normalizeRemoteAddress(value?: string): string | undefined {
   if (!value) return undefined;
   return value.startsWith("::ffff:") ? value.slice(7) : value;
+}
+
+function turnFromEventName(eventName: string): "left" | "right" | undefined {
+  const normalized = eventName.toUpperCase();
+  if (normalized.includes("LEFT") || normalized.includes("ESQUER")) return "left";
+  if (normalized.includes("RIGHT") || normalized.includes("DIREIT")) return "right";
+  return undefined;
 }

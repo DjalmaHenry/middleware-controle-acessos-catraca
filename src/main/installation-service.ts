@@ -16,6 +16,7 @@ interface InstallationDependencies {
   activeSoft: ActiveSoftClient;
   listenerState: () => { running: boolean; port: number; error?: string };
   controlIdDevices: () => ControlIdDeviceContact[];
+  observedControlIdTurns: () => Array<"left" | "right">;
   networkAddresses: () => string[];
   restartListener: () => Promise<void>;
   log: IntegrationLogger;
@@ -60,6 +61,7 @@ export class InstallationService {
     const addresses = this.dependencies.networkAddresses();
     const students = this.dependencies.store.getStudents();
     const devices = this.dependencies.controlIdDevices();
+    const observedTurns = this.dependencies.observedControlIdTurns();
 
     checks.push({
       id: "listener",
@@ -184,15 +186,28 @@ export class InstallationService {
         : "No iDSecure, confira em Cadastros → Pessoas se o campo Matrícula/Registro contém a matrícula ActiveSoft. Uma atualização de usuário recebida pelo Ponte ID fará o contador aumentar."
     });
 
+    const directionsDiffer = settings.turnLeftDirection !== settings.turnRightDirection;
+    const observedBothTurns = observedTurns.includes("left") && observedTurns.includes("right");
+    const directionsValidated = recentDevices.length > 0 && observedBothTurns && directionsDiffer;
     checks.push({
       id: "turn-directions",
-      title: "Sentidos da catraca",
-      status: settings.turnLeftDirection !== settings.turnRightDirection ? "pass" : "warning",
+      title: "Calibração dos sentidos",
+      status: directionsValidated ? "pass" : "warning",
       blocking: false,
-      detail: `TURN LEFT = ${directionName(settings.turnLeftDirection)}; TURN RIGHT = ${directionName(settings.turnRightDirection)}.`,
-      resolution: settings.turnLeftDirection !== settings.turnRightDirection
+      detail: directionsValidated
+        ? `TURN LEFT e TURN RIGHT foram recebidos; configuração local: esquerda = ${directionName(settings.turnLeftDirection)}, direita = ${directionName(settings.turnRightDirection)}.`
+        : recentDevices.length === 0
+          ? "Não validado: nenhuma catraca comunicou com o Ponte ID nos últimos 2 minutos."
+          : !observedBothTurns
+            ? `Contato recebido, mas o teste físico ainda não observou os dois giros. Eventos observados: ${observedTurns.length ? observedTurns.map(turnName).join(", ") : "nenhum TURN LEFT/RIGHT"}.`
+            : "Os dois giros foram observados, mas estão configurados com o mesmo movimento.",
+      resolution: directionsValidated
         ? undefined
-        : "Faça uma entrada e uma saída físicas e ajuste os sentidos nas Configurações."
+        : recentDevices.length === 0
+          ? "Conecte uma catraca e faça uma entrada e uma saída físicas antes de validar os sentidos."
+          : !observedBothTurns
+            ? "Faça uma passagem em cada sentido para o Ponte ID receber TURN LEFT e TURN RIGHT."
+            : "Nas Configurações, atribua movimentos diferentes para giro à esquerda e giro à direita."
     });
 
     const logResult = buildInstallationLog(checks);
@@ -277,4 +292,8 @@ async function runPowerShell(script: string): Promise<string> {
 
 function directionName(direction: "E" | "S"): string {
   return direction === "E" ? "Entrada" : "Saída";
+}
+
+function turnName(turn: "left" | "right"): string {
+  return turn === "left" ? "TURN LEFT" : "TURN RIGHT";
 }

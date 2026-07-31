@@ -24,6 +24,7 @@ let installationReport: InstallationReport | undefined;
 let listenerState: AppState["listener"] = { running: false, port: 8787 };
 let activeSoftState: AppState["activeSoft"] = { status: "unknown" };
 const controlIdDevices = new Map<string, ControlIdDeviceContact>();
+const observedControlIdTurns = new Set<"left" | "right">();
 let quitting = false;
 
 const gotLock = app.requestSingleInstanceLock();
@@ -57,6 +58,7 @@ async function bootstrap(): Promise<void> {
     activeSoft,
     listenerState: () => listenerState,
     controlIdDevices: () => [...controlIdDevices.values()],
+    observedControlIdTurns: () => [...observedControlIdTurns],
     networkAddresses: localIpv4Addresses,
     restartListener,
     log: integrationLog
@@ -128,6 +130,7 @@ function broadcastState(): void { if (window && !window.isDestroyed()) window.we
 async function restartListener(): Promise<void> {
   const port = store.getSettings().listenerPort;
   controlIdDevices.clear();
+  observedControlIdTurns.clear();
   try {
     const actualPort = await controlIdServer.start(port);
     listenerState = { running: true, port: actualPort };
@@ -229,6 +232,7 @@ function localIpv4Addresses(): string[] {
 }
 
 function registerControlIdContact(contact: ControlIdDeviceContact): void {
+  if (contact.observedTurn) observedControlIdTurns.add(contact.observedTurn);
   controlIdDevices.set(contact.key, contact);
   if (controlIdDevices.size > 50) {
     const oldest = [...controlIdDevices.values()]

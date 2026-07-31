@@ -37,7 +37,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\build-windows.ps1
 O instalador será criado em:
 
 ```text
-release\Ponte ID Setup 0.1.1.exe
+release\Ponte ID Setup 0.1.2.exe
 ```
 
 Para executar cada etapa manualmente:

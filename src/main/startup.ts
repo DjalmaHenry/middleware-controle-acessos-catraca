@@ -1,4 +1,4 @@
-import { app } from "electron";
+import { app, LoginItemSettings } from "electron";
 
 export const AUTO_START_ARGUMENT = "--autostart";
 const LOGIN_ITEM_NAME = "Ponte ID";
@@ -23,10 +23,18 @@ export function isAutoStartEnabled(): boolean {
     ? app.getLoginItemSettings({ path: process.execPath, args: [AUTO_START_ARGUMENT] })
     : app.getLoginItemSettings();
 
-  return settings.openAtLogin
-    && (process.platform !== "win32" || settings.executableWillLaunchAtLogin);
+  return loginItemWillLaunch(settings, process.platform);
 }
 
 export function wasStartedAutomatically(): boolean {
   return process.argv.includes(AUTO_START_ARGUMENT);
+}
+
+export function loginItemWillLaunch(
+  settings: Pick<LoginItemSettings, "openAtLogin" | "executableWillLaunchAtLogin">,
+  platform: NodeJS.Platform
+): boolean {
+  return platform === "win32"
+    ? settings.executableWillLaunchAtLogin || settings.openAtLogin
+    : settings.openAtLogin;
 }
