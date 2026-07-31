@@ -173,12 +173,14 @@ export class InstallationService {
     checks.push({
       id: "registration-mapping",
       title: "Vínculo por matrícula",
-      status: mappingCount > 0 ? "pass" : "fail",
-      blocking: true,
+      status: mappingCount > 0 ? "pass" : "warning",
+      blocking: false,
       detail: mappingCount > 0
         ? `${mappingCount} associações user_id → matrícula conhecidas.`
-        : "Nenhuma matrícula Control iD foi associada a um aluno ActiveSoft.",
-      resolution: mappingCount > 0 ? undefined : "Confirme que o campo registration do usuário no iDSecure contém a matrícula ActiveSoft e sincronize os usuários."
+        : "Nenhum vínculo por matrícula foi observado nos eventos recebidos. Isso não confirma que os cadastros estejam incorretos.",
+      resolution: mappingCount > 0
+        ? undefined
+        : "No iDSecure, confira em Cadastros → Pessoas se o campo Matrícula/Registro contém a matrícula ActiveSoft. Uma atualização de usuário recebida pelo Ponte ID fará o contador aumentar."
     });
 
     checks.push({
