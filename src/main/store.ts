@@ -118,7 +118,9 @@ export class JsonStore {
     this.persist();
   }
   dequeue(id: string): void { this.data.queue = this.data.queue.filter((item) => item.id !== id); this.persist(); }
-  getIntegrationLogs(): IntegrationLog[] { return [...this.data.integrationLogs]; }
+  getIntegrationLogs(): IntegrationLog[] {
+    return this.data.integrationLogs.filter((entry) => !isNoisyStudentListingLog(entry));
+  }
   addIntegrationLog(category: IntegrationLogCategory, title: string, payload?: unknown): IntegrationLog {
     const entry: IntegrationLog = {
       id: randomUUID(),
@@ -402,6 +404,13 @@ function sanitizeLogPayload(payload: unknown): unknown {
     }));
   }
   return payload;
+}
+
+function isNoisyStudentListingLog(entry: IntegrationLog): boolean {
+  return (entry.category === "api-out" || entry.category === "api-in")
+    && entry.title.includes("ActiveSoft")
+    && entry.title.includes("GET")
+    && entry.title.includes("/api/v0/lista_alunos/");
 }
 
 function summarizeLargeValue(value: string): string {
