@@ -48,15 +48,15 @@ test("inicia no último log e registra somente uma passagem física nova", async
       accessLogReads += 1;
       return Response.json({
         access_logs: accessLogReads === 1
-          ? [{ id: 10 }]
-          : [{ id: 11, time: now - 20, event: 7, device_id: 1, user_id: 99 }]
+          ? [{ id: "10" }]
+          : [{ id: "11", time: String(now - 20), event: "7", device_id: "1", user_id: "99" }]
       });
     }
     if (body.object === "access_events") {
-      return Response.json({ access_events: [{ id: 70, event: "catra", type: "TURN_LEFT", device_id: 1, timestamp: now - 19 }] });
+      return Response.json({ access_events: [{ id: "70", event: "catra", type: "TURN LEFT", device_id: "1", timestamp: String(now - 19) }] });
     }
     if (body.object === "users") {
-      return Response.json({ users: [{ id: 99, registration: "001234", name: "Aluno Teste" }] });
+      return Response.json({ users: [{ id: "99", registration: "001234", name: "Aluno Teste" }] });
     }
     return Response.json({}, { status: 404 });
   };
@@ -87,6 +87,10 @@ test("inicia no último log e registra somente uma passagem física nova", async
 
   await service.pollNow();
   assert.equal(attendance.length, 1, "o cursor persistido deve impedir duplicidade");
+  assert.ok(requests.every((request) => {
+    const pathname = new URL(request.url).pathname;
+    return pathname === "/login.fcgi" || pathname === "/load_objects.fcgi";
+  }), "a consulta ativa não pode chamar endpoints que alterem a catraca");
 });
 
 test("ignora desistência registrada pela iDBlock Next", async () => {
@@ -114,4 +118,59 @@ test("ignora desistência registrada pela iDBlock Next", async () => {
   await service.pollNow();
   assert.equal(registrations, 0);
   assert.equal(store.getControlIdPollingCursor("192.168.1.189:80"), 21);
+});
+
+test("renova uma sessão expirada sem perder o cursor", async () => {
+  const store = new MemoryPollingStore();
+  let loginCount = 0;
+  let loadCount = 0;
+  const fetchImpl: typeof fetch = async (input) => {
+    if (String(input).includes("/login.fcgi")) {
+      loginCount += 1;
+      return Response.json({ session: `session-${loginCount}` });
+    }
+    loadCount += 1;
+    if (loadCount === 1) return Response.json({ error: "Invalid session" });
+    return Response.json({ access_logs: [{ id: "42" }] });
+  };
+  const service = new ControlIdPollingService(
+    { registerControlIdUser: async () => undefined },
+    store,
+    () => settings,
+    () => undefined,
+    () => undefined,
+    fetchImpl
+  );
+
+  await service.pollNow();
+  assert.equal(loginCount, 2);
+  assert.equal(store.getControlIdPollingCursor("192.168.1.189:80"), 42);
+});
+
+test("aguarda o giro físico sem avançar ou registrar a identificação", async () => {
+  const store = new MemoryPollingStore();
+  store.saveControlIdPollingCursor("192.168.1.189:80", 30);
+  const now = Math.floor(Date.now() / 1000);
+  let registrations = 0;
+  const fetchImpl: typeof fetch = async (input, init) => {
+    const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+    if (String(input).includes("/login.fcgi")) return Response.json({ session: "session-3" });
+    if (body.object === "access_logs") {
+      return Response.json({ access_logs: [{ id: 31, time: now - 20, event: 7, device_id: 1, user_id: 99 }] });
+    }
+    if (body.object === "access_events") return Response.json({ access_events: [] });
+    return Response.json({}, { status: 404 });
+  };
+  const service = new ControlIdPollingService(
+    { registerControlIdUser: async () => { registrations += 1; } },
+    store,
+    () => settings,
+    () => undefined,
+    () => undefined,
+    fetchImpl
+  );
+
+  await service.pollNow();
+  assert.equal(registrations, 0);
+  assert.equal(store.getControlIdPollingCursor("192.168.1.189:80"), 30);
 });

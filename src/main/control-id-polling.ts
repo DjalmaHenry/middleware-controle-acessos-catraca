@@ -8,6 +8,28 @@ const ACCESS_GRACE_SECONDS = 12;
 const ACCESS_MAX_WAIT_SECONDS = 60;
 
 interface AccessLog {
+  id: number | string;
+  time: number | string;
+  event: number | string;
+  device_id?: number | string;
+  user_id?: number | string;
+}
+
+interface AccessEvent {
+  id: number | string;
+  event: string;
+  type: string;
+  device_id?: number | string;
+  timestamp: number | string;
+}
+
+interface ControlIdUser {
+  id: number | string;
+  registration: string | number;
+  name: string;
+}
+
+interface NormalizedAccessLog {
   id: number;
   time: number;
   event: number;
@@ -15,15 +37,15 @@ interface AccessLog {
   user_id?: number;
 }
 
-interface AccessEvent {
+interface NormalizedAccessEvent {
   id: number;
   event: string;
-  type: "TURN_LEFT" | "TURN_RIGHT" | "GIVE_UP" | string;
+  type: string;
   device_id?: number;
   timestamp: number;
 }
 
-interface ControlIdUser {
+interface NormalizedControlIdUser {
   id: number;
   registration: string;
   name: string;
@@ -58,7 +80,7 @@ export class ControlIdPollingService {
   private timer?: NodeJS.Timeout;
   private running = false;
   private readonly sessions = new Map<string, string>();
-  private readonly users = new Map<string, ControlIdUser>();
+  private readonly users = new Map<string, NormalizedControlIdUser>();
   private readonly lastErrors = new Map<string, { message: string; loggedAt: number }>();
 
   constructor(
@@ -140,8 +162,9 @@ export class ControlIdPollingService {
     }, false);
     this.registerContact(device, "/load_objects.fcgi (consulta ativa)");
 
-    for (const access of logs.sort((left, right) => left.id - right.id)) {
-      if (!Number.isFinite(access.id) || access.id <= cursor) continue;
+    for (const rawAccess of logs.sort((left, right) => Number(left.id) - Number(right.id))) {
+      const access = normalizeAccessLog(rawAccess);
+      if (!access || access.id <= cursor) continue;
       const ageSeconds = Math.floor(Date.now() / 1000) - Number(access.time);
       if (ageSeconds < ACCESS_GRACE_SECONDS) break;
 
@@ -204,8 +227,8 @@ export class ControlIdPollingService {
   private async findTurn(
     device: ControlIdDeviceConfig,
     settings: Settings,
-    access: AccessLog
-  ): Promise<AccessEvent | undefined> {
+    access: NormalizedAccessLog
+  ): Promise<NormalizedAccessEvent | undefined> {
     const constraints: Array<[string, string, string | number]> = [
       ["event", "=", "catra"],
       ["timestamp", ">=", Number(access.time) - 2],
@@ -221,7 +244,9 @@ export class ControlIdPollingService {
       limit: 20
     }, true);
     return events
-      .filter((event) => ["TURN_LEFT", "TURN_RIGHT", "GIVE_UP"].includes(String(event.type).toUpperCase()))
+      .map(normalizeAccessEvent)
+      .filter((event): event is NormalizedAccessEvent => Boolean(event))
+      .filter((event) => ["TURN_LEFT", "TURN_RIGHT", "GIVE_UP"].includes(event.type))
       .filter((event) => !this.store.hasProcessedControlIdAccess(`poll:${keyFor(device)}:turn:${event.id}`))
       .sort((left, right) => {
         const leftAfter = left.timestamp >= access.time ? 0 : 1;
@@ -230,7 +255,7 @@ export class ControlIdPollingService {
       })[0];
   }
 
-  private async loadUser(device: ControlIdDeviceConfig, settings: Settings, userId: number): Promise<ControlIdUser> {
+  private async loadUser(device: ControlIdDeviceConfig, settings: Settings, userId: number): Promise<NormalizedControlIdUser> {
     const cacheKey = `${keyFor(device)}:${userId}`;
     const cached = this.users.get(cacheKey);
     if (cached) return cached;
@@ -240,8 +265,15 @@ export class ControlIdPollingService {
       where: where("users", [["id", "=", userId]]),
       limit: 1
     }, true);
-    const user = users[0];
-    if (!user) throw new Error(`Usuário Control iD ${userId} não encontrado em ${device.name}.`);
+    const rawUser = users[0];
+    if (!rawUser) throw new Error(`Usuário Control iD ${userId} não encontrado em ${device.name}.`);
+    const id = Number(rawUser.id);
+    if (!Number.isFinite(id)) throw new Error(`Usuário Control iD ${userId} retornou um ID inválido em ${device.name}.`);
+    const user: NormalizedControlIdUser = {
+      id,
+      registration: String(rawUser.registration ?? ""),
+      name: String(rawUser.name ?? "")
+    };
     this.users.set(cacheKey, user);
     return user;
   }
@@ -371,6 +403,36 @@ function directionForTurn(turn: string, settings: Settings): Direction {
   if (turn === "TURN_LEFT") return settings.turnLeftDirection;
   if (turn === "TURN_RIGHT") return settings.turnRightDirection;
   return settings.direction;
+}
+
+function normalizeAccessLog(value: AccessLog): NormalizedAccessLog | undefined {
+  const id = Number(value.id);
+  const time = Number(value.time);
+  const event = Number(value.event);
+  if (!Number.isFinite(id) || !Number.isFinite(time) || !Number.isFinite(event) || id <= 0 || time <= 0) return undefined;
+  const deviceId = Number(value.device_id);
+  const userId = Number(value.user_id);
+  return {
+    id,
+    time,
+    event,
+    ...(Number.isFinite(deviceId) && deviceId > 0 ? { device_id: deviceId } : {}),
+    ...(Number.isFinite(userId) && userId > 0 ? { user_id: userId } : {})
+  };
+}
+
+function normalizeAccessEvent(value: AccessEvent): NormalizedAccessEvent | undefined {
+  const id = Number(value.id);
+  const timestamp = Number(value.timestamp);
+  if (!Number.isFinite(id) || !Number.isFinite(timestamp) || id <= 0 || timestamp <= 0) return undefined;
+  const deviceId = Number(value.device_id);
+  return {
+    id,
+    timestamp,
+    event: String(value.event ?? "").toLowerCase(),
+    type: String(value.type ?? "").trim().toUpperCase().replace(/[\s-]+/g, "_"),
+    ...(Number.isFinite(deviceId) && deviceId > 0 ? { device_id: deviceId } : {})
+  };
 }
 
 function keyFor(device: ControlIdDeviceConfig): string {
