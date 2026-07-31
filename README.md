@@ -37,7 +37,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\build-windows.ps1
 O instalador será criado em:
 
 ```text
-release\Ponte ID Setup 0.1.7.exe
+release\Ponte ID Setup 0.1.8.exe
 ```
 
 Para executar cada etapa manualmente:
@@ -64,7 +64,7 @@ Em um Mac com Node.js 22 LTS, execute na raiz do projeto:
 O script instala as dependências, executa os testes e gera o mesmo instalador NSIS x64 em:
 
 ```text
-release/Ponte ID Setup 0.1.7.exe
+release/Ponte ID Setup 0.1.8.exe
 ```
 
 Em Macs com Apple Silicon, o script verifica e instala o Rosetta 2 automaticamente na primeira execução. Esta build não requer Docker nem Wine. O comando equivalente pelo npm é `npm run build:windows:macos`.
@@ -101,7 +101,7 @@ Na aba Instalação, `Preparar este computador` aplica somente mudanças locais 
 
 - registra o auto-início após login;
 - reinicia o receptor na porta configurada;
-- no Windows, solicita elevação para criar uma regra de Firewall idempotente, restrita aos perfis Domínio e Privado e à sub-rede local. A validação consulta a política efetiva e informa quando uma GPO ignora regras locais.
+- no Windows, solicita elevação para criar uma regra de Firewall idempotente em todos os perfis, com origem restrita à rede local e à sub-rede privada do iDSecure. A validação consulta a política efetiva e informa quando uma GPO ignora regras locais.
 
 `Validar instalação` verifica receptor, IPv4, Firewall, perfil da rede, DHCP, auto-início, permissões ActiveSoft sem gravar frequência, alunos, fotos, último evento Control iD, vínculos por matrícula e sentidos de giro. Cada falha inclui uma correção específica.
 

@@ -1,6 +1,6 @@
 {
   "name": "ponte-id",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "description": "Integração local entre catracas Control iD e ActiveSoft SIGA",
   "main": "dist/main/main.js",
   "author": "",

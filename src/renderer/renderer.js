@@ -137,7 +137,17 @@ function renderInstallationGuide(state) {
     ? state.networkAddresses.map((address) => `${address}:${state.listener.port}`).join(" · ")
     : "Nenhum IPv4 de rede detectado";
   $("#guide-mappings").textContent = `${state.controlIdMappingCount} ${state.controlIdMappingCount === 1 ? "matrícula" : "matrículas"}`;
-  $("#firewall-command").textContent = `netsh advfirewall firewall add rule name="Ponte ID - Control iD" dir=in action=allow protocol=TCP localport=${state.listener.port} profile=domain,private remoteip=localsubnet`;
+  const remoteScope = ["localsubnet", idSecureSubnet(state.settings.idSecureBaseUrl)].filter(Boolean).join(",");
+  $("#firewall-command").textContent = `netsh advfirewall firewall add rule name="Ponte ID - Control iD" dir=in action=allow protocol=TCP localport=${state.listener.port} profile=any remoteip=${remoteScope}`;
+}
+
+function idSecureSubnet(baseUrl) {
+  try {
+    const parts = new URL(baseUrl).hostname.split(".").map(Number);
+    if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) return "";
+    const isPrivate = parts[0] === 10 || (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) || (parts[0] === 192 && parts[1] === 168);
+    return isPrivate ? `${parts[0]}.${parts[1]}.${parts[2]}.0/24` : "";
+  } catch { return ""; }
 }
 
 function renderInstallationReport(report) {

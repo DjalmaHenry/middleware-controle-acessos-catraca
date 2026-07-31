@@ -1,5 +1,8 @@
 import { execFile } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { request as httpsRequest } from "node:https";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { promisify } from "node:util";
 import { ActiveSoftClient } from "./active-soft";
 import { IntegrationLogger } from "./integration-logger";
@@ -39,12 +42,13 @@ export class InstallationService {
 
     if (process.platform === "win32") {
       try {
-        await installWindowsFirewallRule(settings.listenerPort);
+        const remoteAddresses = firewallRemoteAddresses(settings.idSecureBaseUrl);
+        await installWindowsFirewallRule(settings.listenerPort, remoteAddresses);
         this.dependencies.log("system", "Regra de Firewall do Windows criada", {
           name: FIREWALL_RULE_NAME,
           port: settings.listenerPort,
-          profiles: ["Domain", "Private"],
-          remoteAddress: "LocalSubnet"
+          profiles: ["Domain", "Private", "Public"],
+          remoteAddresses
         });
       } catch (error) {
         this.dependencies.log("error", "Não foi possível criar a regra de Firewall", {
@@ -153,8 +157,8 @@ export class InstallationService {
         ? `${recentDevices.length} ${recentDevices.length === 1 ? "catraca conectada" : "catracas conectadas"}; último contato em ${new Date(latestDevice!.lastSeenAt).toLocaleString("pt-BR")}.`
         : latestDevice
           ? `A última comunicação ocorreu em ${new Date(latestDevice.lastSeenAt).toLocaleString("pt-BR")} e já está inativa.`
-          : "O aplicativo ainda não recebeu nenhuma notificação Control iD.",
-      resolution: recentDevices.length ? undefined : `Configure o Monitor para http://IP-DESTE-PC:${listener.port}/api/notifications e confirme o heartbeat ou faça uma passagem de teste.`
+          : `O receptor local está pronto, mas nenhuma catraca enviou notificações. O painel iDSecure em ${settings.idSecureBaseUrl} não encaminha esses eventos automaticamente.`,
+      resolution: recentDevices.length ? undefined : `No iDSecure, abra Acesso → Dispositivos, obtenha o IP de uma catraca e configure o Monitor dela para http://IP-DESTE-PC:${listener.port}/api/notifications. Depois faça uma passagem de teste.`
     });
 
     const mappingCount = this.dependencies.store.getControlIdMappingCount();
@@ -206,18 +210,50 @@ export class InstallationService {
   }
 }
 
-async function installWindowsFirewallRule(port: number): Promise<void> {
+async function installWindowsFirewallRule(port: number, remoteAddresses: string[]): Promise<void> {
+  const resultFile = path.join(tmpdir(), `ponte-id-firewall-${randomUUID()}.txt`).replaceAll("'", "''");
+  const addressList = remoteAddresses.map((address) => `'${address.replaceAll("'", "''")}'`).join(",");
   const innerScript = [
     "$ErrorActionPreference='Stop'",
-    `$existing=Get-NetFirewallRule -PolicyStore PersistentStore -DisplayName '${FIREWALL_RULE_NAME}' -ErrorAction SilentlyContinue`,
-    "if($existing){$existing|Remove-NetFirewallRule}",
-    `$created=New-NetFirewallRule -DisplayName '${FIREWALL_RULE_NAME}' -Direction Inbound -Action Allow -Protocol TCP -LocalPort ${port} -Profile Domain,Private -RemoteAddress LocalSubnet`,
-    "if(-not $created){throw 'A regra do Firewall não foi criada.'}"
+    "try{",
+    `  $existing=Get-NetFirewallRule -PolicyStore PersistentStore -DisplayName '${FIREWALL_RULE_NAME}' -ErrorAction SilentlyContinue`,
+    "  if($existing){$existing|Remove-NetFirewallRule}",
+    `  $created=New-NetFirewallRule -DisplayName '${FIREWALL_RULE_NAME}' -Direction Inbound -Action Allow -Protocol TCP -LocalPort ${port} -Profile Any -RemoteAddress @(${addressList})`,
+    "  if(-not $created){throw 'A regra do Firewall não foi criada.'}",
+    `  'PASS'|Set-Content -LiteralPath '${resultFile}' -Encoding UTF8`,
+    "  exit 0",
+    "}catch{",
+    `  ($_|Out-String)|Set-Content -LiteralPath '${resultFile}' -Encoding UTF8`,
+    "  exit 1",
+    "}"
   ].join(";");
   const innerEncoded = Buffer.from(innerScript, "utf16le").toString("base64");
-  const outerScript = `$p=Start-Process -FilePath powershell.exe -Verb RunAs -Wait -PassThru -ArgumentList @('-NoProfile','-NonInteractive','-EncodedCommand','${innerEncoded}'); exit $p.ExitCode`;
+  const outerScript = [
+    `$p=Start-Process -FilePath powershell.exe -Verb RunAs -Wait -PassThru -ArgumentList @('-NoProfile','-NonInteractive','-EncodedCommand','${innerEncoded}')`,
+    `$detail=if(Test-Path -LiteralPath '${resultFile}'){Get-Content -LiteralPath '${resultFile}' -Raw}else{'O processo elevado não retornou detalhes.'}`,
+    `Remove-Item -LiteralPath '${resultFile}' -Force -ErrorAction SilentlyContinue`,
+    "if($p.ExitCode -ne 0){Write-Error $detail;exit $p.ExitCode}",
+    "Write-Output $detail"
+  ].join(";");
   const outerEncoded = Buffer.from(outerScript, "utf16le").toString("base64");
   await execFileAsync("powershell.exe", ["-NoProfile", "-NonInteractive", "-EncodedCommand", outerEncoded], { timeout: 120_000 });
+}
+
+export function firewallRemoteAddresses(idSecureBaseUrl: string): string[] {
+  const addresses = ["LocalSubnet"];
+  try {
+    const octets = new URL(idSecureBaseUrl).hostname.split(".").map(Number);
+    const isIpv4 = octets.length === 4 && octets.every((octet) => Number.isInteger(octet) && octet >= 0 && octet <= 255);
+    const isPrivate = isIpv4 && (
+      octets[0] === 10
+      || (octets[0] === 172 && octets[1] >= 16 && octets[1] <= 31)
+      || (octets[0] === 192 && octets[1] === 168)
+    );
+    if (isPrivate) addresses.push(`${octets[0]}.${octets[1]}.${octets[2]}.0/24`);
+  } catch {
+    // LocalSubnet remains the safe fallback when the configured URL is invalid.
+  }
+  return [...new Set(addresses)];
 }
 
 async function validateIdSecure(baseUrl: string): Promise<InstallationCheck> {
@@ -269,10 +305,10 @@ async function validateFirewall(port: number): Promise<InstallationCheck> {
   try {
     const script = [
       `$categories=@(Get-NetConnectionProfile | Where-Object {$_.IPv4Connectivity -ne 'Disconnected'} | Select-Object -ExpandProperty NetworkCategory)`,
-      `$required=@($categories | ForEach-Object {if($_ -eq 'DomainAuthenticated'){'Domain'}elseif($_ -eq 'Private'){'Private'}} | Select-Object -Unique)`,
+      `$required=@($categories | ForEach-Object {if($_ -eq 'DomainAuthenticated'){'Domain'}elseif($_ -eq 'Private'){'Private'}elseif($_ -eq 'Public'){'Public'}} | Select-Object -Unique)`,
       "if($required.Count -eq 0){'UNSUPPORTED_PROFILE';exit}",
       `$r=Get-NetFirewallRule -PolicyStore ActiveStore -DisplayName '${FIREWALL_RULE_NAME}' -ErrorAction SilentlyContinue | Where-Object {`,
-      "  $profile=$_.Profile.ToString(); $missing=@($required | Where-Object {-not $profile.Contains($_)});",
+      "  $profile=$_.Profile.ToString(); $missing=@($required | Where-Object {$profile -ne 'Any' -and -not $profile.Contains($_)});",
       "  $_.Enabled -eq 'True' -and $_.Direction -eq 'Inbound' -and $_.Action -eq 'Allow' -and $missing.Count -eq 0",
       "}",
       "if(-not $r){'MISSING_EFFECTIVE';exit}",
@@ -289,14 +325,14 @@ async function validateFirewall(port: number): Promise<InstallationCheck> {
     const details: Record<string, string> = {
       WRONG_PORT: "A regra efetiva existe, mas aponta para outra porta.",
       WRONG_SCOPE: "A regra efetiva não está limitada à sub-rede local.",
-      UNSUPPORTED_PROFILE: "A rede ativa está no perfil Público ou não pôde ser classificada.",
+      UNSUPPORTED_PROFILE: "A rede ativa não pôde ser classificada pelo Windows.",
       MISSING_EFFECTIVE: "A regra não aparece na política efetiva do Firewall. Uma política da organização pode estar ignorando regras locais."
     };
     return {
       id: "firewall", title: "Firewall do Windows", status: "fail", blocking: true,
       detail: details[output] ?? `A regra de entrada não foi validada: ${output || "sem resposta"}.`,
       resolution: output === "MISSING_EFFECTIVE"
-        ? `Solicite ao TI uma regra corporativa de entrada TCP ${port}, perfis Domínio e Privado, origem LocalSubnet. Não desative o Firewall.`
+        ? `Solicite ao TI uma regra corporativa de entrada TCP ${port}, todos os perfis, origem restrita à rede local. Não desative o Firewall.`
         : "Clique em Preparar este computador. Em equipamento gerenciado, solicite ao TI a aplicação da regra por política da organização."
     };
   } catch (error) {
@@ -313,18 +349,23 @@ async function validateWindowsNetworkProfile(): Promise<InstallationCheck> {
     const output = (await runPowerShell("(Get-NetConnectionProfile | Where-Object {$_.IPv4Connectivity -ne 'Disconnected'} | Select-Object -ExpandProperty NetworkCategory) -join ','")).trim();
     const profiles = output.split(",").filter(Boolean);
     const isTrusted = profiles.some((profile) => profile === "Private" || profile === "DomainAuthenticated");
+    const isPublic = profiles.includes("Public");
     const isManagedDomain = profiles.includes("DomainAuthenticated");
     return {
       id: "network-profile", title: "Perfil da rede Windows",
-      status: isTrusted ? "pass" : "fail", blocking: true,
+      status: isTrusted ? "pass" : isPublic ? "warning" : "fail", blocking: !isPublic,
       detail: isManagedDomain
         ? `Perfil gerenciado por domínio adequado: ${output}. Não é necessário alterá-lo para Privado.`
         : isTrusted
           ? `Perfil de rede adequado: ${output}.`
-          : `Perfil atual: ${output || "não identificado"}. O Ponte ID não libera entrada no perfil Público.`,
+          : isPublic
+            ? "Perfil Público gerenciado detectado. O Ponte ID mantém esse perfil e usa uma regra de entrada própria, restrita às redes internas configuradas."
+            : `Perfil atual: ${output || "não identificado"}.`,
       resolution: isTrusted
         ? undefined
-        : "Se esta configuração for gerenciada pela organização, solicite ao TI o perfil Domínio/Privado e a regra corporativa do Ponte ID. Não tente contornar a política."
+        : isPublic
+          ? "Não é necessário alterar uma configuração gerenciada pela organização. Confirme apenas que a verificação do Firewall ficou verde."
+          : "Solicite ao TI a classificação da rede e uma regra corporativa do Ponte ID. Não tente contornar a política."
     };
   } catch (error) {
     return { id: "network-profile", title: "Perfil da rede Windows", status: "warning", blocking: false, detail: `Não foi possível consultar o perfil: ${String(error)}`, resolution: "Confirme com o TI se a conexão usa o perfil Domínio ou Privado." };
