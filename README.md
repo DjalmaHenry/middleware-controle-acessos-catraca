@@ -11,14 +11,47 @@ npm run dev
 
 ## Gerar o instalador Windows
 
-Execute em um computador Windows x64 ou dispare manualmente o workflow `Gerar instalador Windows` no GitHub Actions:
+### Requisitos
+
+- Windows 10 ou Windows 11 x64;
+- Git para Windows;
+- Node.js 22 LTS, que já inclui o npm;
+- conexão com a internet durante a primeira build.
+
+### Build automatizada
+
+Depois de clonar o repositório, abra o PowerShell ou Terminal do Windows dentro da pasta do projeto e execute:
+
+```powershell
+.\build-windows.cmd
+```
+
+O script instala exatamente as dependências do `package-lock.json`, executa os testes, remove builds antigas, gera o instalador NSIS x64 e mostra o SHA-256 do arquivo.
+
+Também é possível executar diretamente pelo PowerShell:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\build-windows.ps1
+```
+
+O instalador será criado em:
+
+```text
+release\Ponte ID Setup 0.1.0.exe
+```
+
+Para executar cada etapa manualmente:
 
 ```powershell
 npm ci
+npm test
+npm run clean
 npm run dist:win
 ```
 
-O instalador NSIS será criado em `release/`. Após instalado, o aplicativo inicia com o Windows, permanece na bandeja do sistema e fecha a janela sem interromper o receptor.
+Também é possível disparar manualmente o workflow `Gerar instalador Windows` no GitHub Actions. Após instalado, o aplicativo inicia com o Windows, permanece na bandeja do sistema e fecha a janela sem interromper o receptor.
+
+O instalador atual não possui certificado comercial de assinatura de código. Até que um certificado seja configurado, o Windows SmartScreen pode solicitar confirmação adicional na primeira execução.
 
 ## Endpoints locais já aceitos
 

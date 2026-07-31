@@ -6,11 +6,12 @@
   "author": "",
   "license": "UNLICENSED",
   "scripts": {
-    "clean": "rm -rf dist release",
+    "clean": "node scripts/clean.mjs",
     "build": "tsc && node scripts/copy-static.mjs",
     "dev": "npm run build && electron .",
     "start": "electron .",
     "test": "npm run build && node --test dist/test/*.test.js",
+    "build:windows": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File ./build-windows.ps1",
     "dist:win": "npm run build && electron-builder --win nsis --x64"
   },
   "devDependencies": {

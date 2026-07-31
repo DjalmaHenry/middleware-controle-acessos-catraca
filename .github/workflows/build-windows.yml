@@ -17,12 +17,9 @@ jobs:
         with:
           node-version: 22
           cache: npm
-      - name: Instalar dependências
-        run: npm ci
-      - name: Executar testes
-        run: npm test
-      - name: Gerar instalador
-        run: npm run dist:win
+      - name: Instalar, testar e gerar instalador
+        shell: powershell
+        run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\build-windows.ps1
       - name: Disponibilizar instalador
         uses: actions/upload-artifact@v4
         with:
