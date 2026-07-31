@@ -135,7 +135,7 @@ function renderInstallationGuide(state) {
     ? state.networkAddresses.map((address) => `${address}:${state.listener.port}`).join(" · ")
     : "Nenhum IPv4 de rede detectado";
   $("#guide-mappings").textContent = `${state.controlIdMappingCount} ${state.controlIdMappingCount === 1 ? "matrícula" : "matrículas"}`;
-  $("#firewall-command").textContent = `netsh advfirewall firewall add rule name="Ponte ID - Control iD" dir=in action=allow protocol=TCP localport=${state.listener.port} profile=private remoteip=localsubnet`;
+  $("#firewall-command").textContent = `netsh advfirewall firewall add rule name="Ponte ID - Control iD" dir=in action=allow protocol=TCP localport=${state.listener.port} profile=domain,private remoteip=localsubnet`;
 }
 
 function renderInstallationReport(report) {

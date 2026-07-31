@@ -43,6 +43,7 @@ export class InstallationService {
         this.dependencies.log("system", "Regra de Firewall do Windows criada", {
           name: FIREWALL_RULE_NAME,
           port: settings.listenerPort,
+          profiles: ["Domain", "Private"],
           remoteAddress: "LocalSubnet"
         });
       } catch (error) {
@@ -207,7 +208,7 @@ async function installWindowsFirewallRule(port: number): Promise<void> {
   const innerScript = [
     `$existing=Get-NetFirewallRule -DisplayName '${FIREWALL_RULE_NAME}' -ErrorAction SilentlyContinue`,
     "if($existing){$existing|Remove-NetFirewallRule}",
-    `New-NetFirewallRule -DisplayName '${FIREWALL_RULE_NAME}' -Direction Inbound -Action Allow -Protocol TCP -LocalPort ${port} -Profile Private -RemoteAddress LocalSubnet | Out-Null`
+    `New-NetFirewallRule -DisplayName '${FIREWALL_RULE_NAME}' -Direction Inbound -Action Allow -Protocol TCP -LocalPort ${port} -Profile Domain,Private -RemoteAddress LocalSubnet | Out-Null`
   ].join(";");
   const innerEncoded = Buffer.from(innerScript, "utf16le").toString("base64");
   const outerScript = `$p=Start-Process -FilePath powershell.exe -Verb RunAs -Wait -PassThru -ArgumentList @('-NoProfile','-NonInteractive','-EncodedCommand','${innerEncoded}'); exit $p.ExitCode`;
@@ -217,21 +218,43 @@ async function installWindowsFirewallRule(port: number): Promise<void> {
 
 async function validateFirewall(port: number): Promise<InstallationCheck> {
   try {
-    const script = `$r=Get-NetFirewallRule -DisplayName '${FIREWALL_RULE_NAME}' -ErrorAction SilentlyContinue | Where-Object {$_.Enabled -eq 'True' -and $_.Direction -eq 'Inbound' -and $_.Action -eq 'Allow' -and $_.Profile.ToString().Contains('Private')}; if($r){$p=$r|Get-NetFirewallPortFilter|Where-Object {$_.Protocol -eq 'TCP' -and $_.LocalPort -eq '${port}'}; if($p){'PASS'}else{'WRONG_PORT'}}else{'MISSING'}`;
+    const script = [
+      `$categories=@(Get-NetConnectionProfile | Where-Object {$_.IPv4Connectivity -ne 'Disconnected'} | Select-Object -ExpandProperty NetworkCategory)`,
+      `$required=@($categories | ForEach-Object {if($_ -eq 'DomainAuthenticated'){'Domain'}elseif($_ -eq 'Private'){'Private'}} | Select-Object -Unique)`,
+      "if($required.Count -eq 0){'UNSUPPORTED_PROFILE';exit}",
+      `$r=Get-NetFirewallRule -PolicyStore ActiveStore -DisplayName '${FIREWALL_RULE_NAME}' -ErrorAction SilentlyContinue | Where-Object {`,
+      "  $profile=$_.Profile.ToString(); $missing=@($required | Where-Object {-not $profile.Contains($_)});",
+      "  $_.Enabled -eq 'True' -and $_.Direction -eq 'Inbound' -and $_.Action -eq 'Allow' -and $missing.Count -eq 0",
+      "}",
+      "if(-not $r){'MISSING_EFFECTIVE';exit}",
+      `$p=$r|Get-NetFirewallPortFilter|Where-Object {$_.Protocol -eq 'TCP' -and $_.LocalPort -eq '${port}'}`,
+      "if(-not $p){'WRONG_PORT';exit}",
+      "$a=$r|Get-NetFirewallAddressFilter|Where-Object {$_.RemoteAddress -contains 'LocalSubnet'}",
+      "if(-not $a){'WRONG_SCOPE';exit}",
+      "'PASS'"
+    ].join(";");
     const output = (await runPowerShell(script)).trim();
     if (output === "PASS") {
-      return { id: "firewall", title: "Firewall do Windows", status: "pass", blocking: true, detail: `Entrada TCP ${port} liberada somente no perfil privado e rede local.` };
+      return { id: "firewall", title: "Firewall do Windows", status: "pass", blocking: true, detail: `Entrada TCP ${port} efetiva no perfil atual, limitada à sub-rede local.` };
     }
+    const details: Record<string, string> = {
+      WRONG_PORT: "A regra efetiva existe, mas aponta para outra porta.",
+      WRONG_SCOPE: "A regra efetiva não está limitada à sub-rede local.",
+      UNSUPPORTED_PROFILE: "A rede ativa está no perfil Público ou não pôde ser classificada.",
+      MISSING_EFFECTIVE: "A regra não aparece na política efetiva do Firewall. Uma política da organização pode estar ignorando regras locais."
+    };
     return {
       id: "firewall", title: "Firewall do Windows", status: "fail", blocking: true,
-      detail: output === "WRONG_PORT" ? "A regra existe, mas aponta para outra porta." : "A regra de entrada não foi encontrada.",
-      resolution: "Clique em Preparar este computador e aceite a confirmação de administrador do Windows."
+      detail: details[output] ?? `A regra de entrada não foi validada: ${output || "sem resposta"}.`,
+      resolution: output === "MISSING_EFFECTIVE"
+        ? `Solicite ao TI uma regra corporativa de entrada TCP ${port}, perfis Domínio e Privado, origem LocalSubnet. Não desative o Firewall.`
+        : "Clique em Preparar este computador. Em equipamento gerenciado, solicite ao TI a aplicação da regra por política da organização."
     };
   } catch (error) {
     return {
       id: "firewall", title: "Firewall do Windows", status: "fail", blocking: true,
       detail: `Não foi possível consultar o Firewall: ${error instanceof Error ? error.message : String(error)}`,
-      resolution: "Execute o aplicativo como administrador apenas durante a preparação e tente novamente."
+      resolution: "Execute a preparação com elevação. Se o computador for gerenciado, solicite ao TI a regra pelo Firewall corporativo."
     };
   }
 }
@@ -239,15 +262,23 @@ async function validateFirewall(port: number): Promise<InstallationCheck> {
 async function validateWindowsNetworkProfile(): Promise<InstallationCheck> {
   try {
     const output = (await runPowerShell("(Get-NetConnectionProfile | Where-Object {$_.IPv4Connectivity -ne 'Disconnected'} | Select-Object -ExpandProperty NetworkCategory) -join ','")).trim();
-    const isPrivate = output.split(",").some((profile) => profile === "Private" || profile === "DomainAuthenticated");
+    const profiles = output.split(",").filter(Boolean);
+    const isTrusted = profiles.some((profile) => profile === "Private" || profile === "DomainAuthenticated");
+    const isManagedDomain = profiles.includes("DomainAuthenticated");
     return {
       id: "network-profile", title: "Perfil da rede Windows",
-      status: isPrivate ? "pass" : "fail", blocking: true,
-      detail: isPrivate ? `Perfil de rede adequado: ${output}.` : `Perfil atual: ${output || "não identificado"}. A regra privada do Firewall não será aplicada numa rede pública.`,
-      resolution: isPrivate ? undefined : "Abra Configurações > Rede e Internet > Ethernet > Propriedades e altere Tipo de perfil de rede para Privada."
+      status: isTrusted ? "pass" : "fail", blocking: true,
+      detail: isManagedDomain
+        ? `Perfil gerenciado por domínio adequado: ${output}. Não é necessário alterá-lo para Privado.`
+        : isTrusted
+          ? `Perfil de rede adequado: ${output}.`
+          : `Perfil atual: ${output || "não identificado"}. O Ponte ID não libera entrada no perfil Público.`,
+      resolution: isTrusted
+        ? undefined
+        : "Se esta configuração for gerenciada pela organização, solicite ao TI o perfil Domínio/Privado e a regra corporativa do Ponte ID. Não tente contornar a política."
     };
   } catch (error) {
-    return { id: "network-profile", title: "Perfil da rede Windows", status: "warning", blocking: false, detail: `Não foi possível consultar o perfil: ${String(error)}`, resolution: "Confirme manualmente que a conexão Ethernet está como Rede privada." };
+    return { id: "network-profile", title: "Perfil da rede Windows", status: "warning", blocking: false, detail: `Não foi possível consultar o perfil: ${String(error)}`, resolution: "Confirme com o TI se a conexão usa o perfil Domínio ou Privado." };
   }
 }
 

@@ -37,7 +37,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\build-windows.ps1
 O instalador será criado em:
 
 ```text
-release\Ponte ID Setup 0.1.4.exe
+release\Ponte ID Setup 0.1.5.exe
 ```
 
 Para executar cada etapa manualmente:
@@ -85,7 +85,7 @@ Na aba Instalação, `Preparar este computador` aplica somente mudanças locais 
 
 - registra o auto-início após login;
 - reinicia o receptor na porta configurada;
-- no Windows, solicita elevação para criar uma regra de Firewall idempotente, restrita ao perfil privado e à sub-rede local.
+- no Windows, solicita elevação para criar uma regra de Firewall idempotente, restrita aos perfis Domínio e Privado e à sub-rede local. A validação consulta a política efetiva e informa quando uma GPO ignora regras locais.
 
 `Validar instalação` verifica receptor, IPv4, Firewall, perfil da rede, DHCP, auto-início, permissões ActiveSoft sem gravar frequência, alunos, fotos, último evento Control iD, vínculos por matrícula e sentidos de giro. Cada falha inclui uma correção específica.
 
