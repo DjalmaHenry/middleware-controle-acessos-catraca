@@ -2,7 +2,6 @@ const $ = (selector) => document.querySelector(selector);
 let appState;
 const photoCache = new Map();
 const photoRequests = new Map();
-const CONTROL_ID_ONLINE_WINDOW_MS = 2 * 60 * 1000;
 
 const titles = {
   dashboard: ["Monitor de acesso", "Acompanhe as entradas em tempo real"],
@@ -71,78 +70,34 @@ function render(state) {
 function renderControlIdStatus(state) {
   const dot = $("#listener-dot");
   const status = $("#listener-status");
-  if (state.settings.controlIdMode === "polling") {
-    const configured = state.settings.controlIdDevices.filter((device) => device.enabled);
-    const devices = (state.controlId?.devices ?? []).filter((device) => device.key.startsWith("poll:"));
-    const now = Date.now();
-    const recent = devices.filter((device) => now - new Date(device.lastSeenAt).getTime() <= CONTROL_ID_ONLINE_WINDOW_MS);
-    const recentIds = new Set(recent.map((device) => device.deviceId));
-    const connected = configured.filter((device) => recentIds.has(device.id));
-    const latest = [...devices].sort((left, right) => right.lastSeenAt.localeCompare(left.lastSeenAt))[0];
-    if (!state.settings.controlIdPasswordConfigured) {
-      dot.className = "dot";
-      status.textContent = "Informe a senha";
-      status.title = "Configure a credencial administrativa das catracas";
-      return;
-    }
-    if (configured.length && connected.length === configured.length) {
-      dot.className = "dot ok";
-      status.textContent = `${connected.length} ${connected.length === 1 ? "catraca consultada" : "catracas consultadas"}`;
-      status.title = `Última consulta: ${new Date(latest.lastSeenAt).toLocaleString("pt-BR")}`;
-      return;
-    }
-    if (connected.length) {
-      dot.className = "dot warn";
-      status.textContent = `${connected.length} de ${configured.length} respondendo`;
-      status.title = "Abra a validação para identificar o dispositivo sem resposta";
-      return;
-    }
-    dot.className = "dot bad";
-    status.textContent = "Sem resposta das catracas";
-    status.title = latest
-      ? `Último contato ${elapsedLabel(new Date(latest.lastSeenAt).getTime(), now)}`
-      : "Confira IPs, porta, usuário e senha";
+  if (!state.settings.idSecurePasswordConfigured || !state.settings.idSecureUsername) {
+    dot.className = "dot";
+    status.textContent = "Configure o iDSecure";
+    status.title = "Informe o usuário e a senha do painel geral iDSecure";
     return;
   }
-
-  if (!state.listener.running) {
-    dot.className = "dot bad";
-    status.textContent = "Receptor parado";
-    status.title = state.listener.error || `Porta ${state.listener.port} indisponível`;
-    return;
-  }
-
-  const devices = state.controlId?.devices ?? [];
-  const now = Date.now();
-  const recent = devices.filter((device) => now - new Date(device.lastSeenAt).getTime() <= CONTROL_ID_ONLINE_WINDOW_MS);
-  const latest = [...devices].sort((left, right) => right.lastSeenAt.localeCompare(left.lastSeenAt))[0];
-  if (recent.length) {
+  if (state.idSecure?.status === "online") {
     dot.className = "dot ok";
-    status.textContent = `${recent.length} ${recent.length === 1 ? "catraca conectada" : "catracas conectadas"}`;
-    status.title = `Último contato: ${new Date(latest.lastSeenAt).toLocaleString("pt-BR")} · receptor na porta ${state.listener.port}`;
+    status.textContent = "Monitor iDSecure conectado";
+    status.title = state.idSecure.lastSeenAt
+      ? `Última consulta: ${new Date(state.idSecure.lastSeenAt).toLocaleString("pt-BR")}`
+      : state.idSecure.message;
     return;
   }
-  if (latest) {
+  if (state.idSecure?.status === "offline") {
     dot.className = "dot bad";
-    status.textContent = `Sem contato ${elapsedLabel(new Date(latest.lastSeenAt).getTime(), now)}`;
-    status.title = `Último contato: ${new Date(latest.lastSeenAt).toLocaleString("pt-BR")} · receptor ativo na porta ${state.listener.port}`;
+    status.textContent = "Monitor iDSecure offline";
+    status.title = state.idSecure.message || "Abra o Console para consultar o erro";
     return;
   }
   dot.className = "dot";
-  status.textContent = "Aguardando catraca";
-  status.title = `Receptor pronto na porta ${state.listener.port}, mas nenhuma catraca se comunicou`;
-}
-
-function elapsedLabel(then, now = Date.now()) {
-  const minutes = Math.max(1, Math.floor((now - then) / 60_000));
-  if (minutes < 60) return `há ${minutes} min`;
-  const hours = Math.floor(minutes / 60);
-  return `há ${hours} ${hours === 1 ? "hora" : "horas"}`;
+  status.textContent = "Conectando ao iDSecure";
+  status.title = state.idSecure?.message || "Aguardando a primeira consulta";
 }
 
 const consoleLabels = {
-  "device-in": "CATRACA → APP",
-  "device-out": "APP → CATRACA",
+  "device-in": "CONTROL ID → APP",
+  "device-out": "APP → CONTROL ID",
   "api-out": "APP → API",
   "api-in": "API → APP",
   system: "SISTEMA",
@@ -293,6 +248,10 @@ function fillSettings(state) {
   if (document.activeElement?.closest("#settings-form")) return;
   $("#api-url").value = state.settings.activeSoftBaseUrl;
   $("#idsecure-url").value = state.settings.idSecureBaseUrl;
+  $("#idsecure-username").value = state.settings.idSecureUsername;
+  $("#idsecure-password-hint").textContent = state.settings.idSecurePasswordConfigured
+    ? "Senha armazenada com proteção do Windows."
+    : "Nenhuma senha configurada.";
   $("#control-id-mode").value = state.settings.controlIdMode;
   $("#control-id-username").value = state.settings.controlIdUsername;
   $("#control-id-password-hint").textContent = state.settings.controlIdPasswordConfigured
@@ -347,6 +306,8 @@ $("#settings-form").addEventListener("submit", async (event) => {
     const state = await window.ponte.saveSettings({
       activeSoftBaseUrl: $("#api-url").value.trim(), activeSoftToken: $("#api-token").value.trim() || undefined,
       idSecureBaseUrl: $("#idsecure-url").value.trim(),
+      idSecureUsername: $("#idsecure-username").value.trim(),
+      idSecurePassword: $("#idsecure-password").value.trim() || undefined,
       controlIdMode: $("#control-id-mode").value,
       controlIdUsername: $("#control-id-username").value.trim(),
       controlIdPassword: $("#control-id-password").value.trim() || undefined,
@@ -356,7 +317,7 @@ $("#settings-form").addEventListener("submit", async (event) => {
       autoStart: true,
       developerMode: $("#developer-mode").checked
     });
-    $("#api-token").value = ""; $("#control-id-password").value = ""; render(state); message.textContent = "Configurações salvas.";
+    $("#api-token").value = ""; $("#control-id-password").value = ""; $("#idsecure-password").value = ""; render(state); message.textContent = "Configurações salvas.";
   } catch (error) { message.className = "form-message error"; message.textContent = error.message; }
 });
 

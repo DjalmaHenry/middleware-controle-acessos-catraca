@@ -8,6 +8,8 @@ const settings: Settings = {
   activeSoftBaseUrl: "https://siga01.activesoft.com.br",
   activeSoftToken: "test-token",
   idSecureBaseUrl: "https://192.168.1.2:30443",
+  idSecureUsername: "operator",
+  idSecurePassword: "panel-password",
   controlIdMode: "polling",
   controlIdUsername: "admin",
   controlIdPassword: "test-password",

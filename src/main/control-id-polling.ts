@@ -1,105 +1,41 @@
 import { AccessService } from "./access-service";
 import { IntegrationLogger } from "./integration-logger";
 import { JsonStore } from "./store";
-import { ControlIdDeviceConfig, ControlIdDeviceContact, Direction, Settings } from "../shared/types";
+import { ControlIdDeviceConfig, ControlIdDeviceContact, Settings } from "../shared/types";
 
 const POLL_INTERVAL_MS = 5_000;
-const ACCESS_GRACE_SECONDS = 12;
-const ACCESS_MAX_WAIT_SECONDS = 60;
-
-interface AccessLog {
-  id: number | string;
-  time: number | string;
-  event: number | string;
-  device_id?: number | string;
-  user_id?: number | string;
-}
 
 interface AccessEvent {
   id: number | string;
-  event: string;
-  type: string;
+  event?: string;
+  type?: string;
   device_id?: number | string;
-  timestamp: number | string;
-}
-
-interface ControlIdUser {
-  id: number | string;
-  registration: string | number;
-  name: string;
-}
-
-interface NormalizedAccessLog {
-  id: number;
-  time: number;
-  event: number;
-  device_id?: number;
-  user_id?: number;
-}
-
-interface NormalizedAccessEvent {
-  id: number;
-  event: string;
-  type: string;
-  device_id?: number;
-  timestamp: number;
-}
-
-interface NormalizedControlIdUser {
-  id: number;
-  registration: string;
-  name: string;
-}
-
-type WhereClause = {
-  object: string;
-  field: string;
-  operator: string;
-  value: string | number;
-  connector?: string;
-};
-
-interface PollingStore {
-  getControlIdPollingCursor(deviceKey: string): number | undefined;
-  saveControlIdPollingCursor(deviceKey: string, cursor: number): void;
-  hasProcessedControlIdAccess(sourceId: string): boolean;
-  markProcessedControlIdAccess(sourceId: string): void;
-  saveControlIdMapping(userId: number | string, registration: string): void;
-}
-
-interface PollingAccessService {
-  registerControlIdUser(
-    userId: number,
-    direction?: Direction,
-    occurredAt?: string,
-    registration?: string
-  ): Promise<unknown>;
+  timestamp?: number | string;
 }
 
 export class ControlIdPollingService {
   private timer?: NodeJS.Timeout;
   private running = false;
   private readonly sessions = new Map<string, string>();
-  private readonly users = new Map<string, NormalizedControlIdUser>();
+  private readonly lastEventIds = new Map<string, number>();
   private readonly lastErrors = new Map<string, { message: string; loggedAt: number }>();
 
   constructor(
-    private readonly accessService: PollingAccessService | AccessService,
-    private readonly store: PollingStore | JsonStore,
+    _accessService: AccessService | unknown,
+    _store: JsonStore | unknown,
     private readonly getSettings: () => Settings,
     private readonly log: IntegrationLogger,
     private readonly onDeviceContact: (contact: ControlIdDeviceContact) => void = () => undefined,
     private readonly fetchImpl: typeof fetch = fetch
   ) {}
 
-  start(): void {
-    void this.restart();
-  }
+  start(): void { void this.restart(); }
 
   stop(): void {
     if (this.timer) clearInterval(this.timer);
     this.timer = undefined;
     this.sessions.clear();
+    this.lastEventIds.clear();
   }
 
   async restart(): Promise<void> {
@@ -130,184 +66,60 @@ export class ControlIdPollingService {
   }
 
   private async pollDevice(device: ControlIdDeviceConfig, settings: Settings): Promise<void> {
-    const deviceKey = keyFor(device);
-    const cursor = this.store.getControlIdPollingCursor(deviceKey);
-
-    if (cursor === undefined) {
-      const latest = await this.loadObjects<AccessLog>(device, settings, {
-        object: "access_logs",
-        fields: ["id"],
-        order: ["id", "descending"],
-        limit: 1
-      }, true);
-      const baseline = Number(latest[0]?.id) || 0;
-      this.store.saveControlIdPollingCursor(deviceKey, baseline);
-      this.registerContact(device, "/load_objects.fcgi (consulta inicial)");
-      this.log("system", `${device.name} conectada por consulta ativa`, {
-        address: baseUrl(device),
-        initialCursor: baseline,
-        detail: "O histórico anterior à instalação não será reenviado."
-      });
-      return;
-    }
-
-    const logs = await this.loadObjects<AccessLog>(device, settings, {
-      object: "access_logs",
-      fields: ["id", "time", "event", "device_id", "user_id"],
-      where: where("access_logs", [
-        ["id", ">", cursor]
-      ]),
-      order: ["id", "ascending"],
-      limit: 100
-    }, false);
-    this.registerContact(device, "/load_objects.fcgi (consulta ativa)");
-
-    for (const rawAccess of logs.sort((left, right) => Number(left.id) - Number(right.id))) {
-      const access = normalizeAccessLog(rawAccess);
-      if (!access || access.id <= cursor) continue;
-      const ageSeconds = Math.floor(Date.now() / 1000) - Number(access.time);
-      if (ageSeconds < ACCESS_GRACE_SECONDS) break;
-
-      if (access.event !== 7 || !access.user_id) {
-        this.store.saveControlIdPollingCursor(deviceKey, access.id);
-        continue;
-      }
-
-      const sourceId = `poll:${deviceKey}:access:${access.id}`;
-      if (this.store.hasProcessedControlIdAccess(sourceId)) {
-        this.store.saveControlIdPollingCursor(deviceKey, access.id);
-        continue;
-      }
-
-      const turn = await this.findTurn(device, settings, access);
-      if (!turn) {
-        if (ageSeconds < ACCESS_MAX_WAIT_SECONDS) break;
-        this.log("error", `${device.name}: acesso sem giro físico confirmado`, {
-          accessLog: access,
-          detail: "O evento não foi enviado à ActiveSoft."
-        });
-        this.store.markProcessedControlIdAccess(sourceId);
-        this.store.saveControlIdPollingCursor(deviceKey, access.id);
-        continue;
-      }
-
-      const turnId = `poll:${deviceKey}:turn:${turn.id}`;
-      if (turn.type === "GIVE_UP") {
-        this.log("system", `${device.name}: desistência de passagem ignorada`, { accessLog: access, accessEvent: turn });
-        this.store.markProcessedControlIdAccess(sourceId);
-        this.store.markProcessedControlIdAccess(turnId);
-        this.store.saveControlIdPollingCursor(deviceKey, access.id);
-        continue;
-      }
-
-      const user = await this.loadUser(device, settings, Number(access.user_id));
-      if (!user.registration?.trim()) {
-        throw new Error(`O usuário ${access.user_id} (${user.name || "sem nome"}) não possui matrícula no campo registration.`);
-      }
-
-      this.log("device-in", `${device.name}: passagem física confirmada`, {
-        accessLog: access,
-        accessEvent: turn,
-        user: { id: user.id, registration: user.registration, name: user.name }
-      });
-      this.store.saveControlIdMapping(user.id, user.registration);
-      await this.accessService.registerControlIdUser(
-        user.id,
-        directionForTurn(turn.type, settings),
-        new Date(Number(turn.timestamp || access.time) * 1000).toISOString(),
-        user.registration
-      );
-      this.store.markProcessedControlIdAccess(sourceId);
-      this.store.markProcessedControlIdAccess(turnId);
-      this.store.saveControlIdPollingCursor(deviceKey, access.id);
-      this.registerContact(device, "/load_objects.fcgi (giro confirmado)", turn.type);
-    }
-  }
-
-  private async findTurn(
-    device: ControlIdDeviceConfig,
-    settings: Settings,
-    access: NormalizedAccessLog
-  ): Promise<NormalizedAccessEvent | undefined> {
-    const constraints: Array<[string, string, string | number]> = [
-      ["event", "=", "catra"],
-      ["timestamp", ">=", Number(access.time) - 2],
-      ["timestamp", "<=", Number(access.time) + ACCESS_MAX_WAIT_SECONDS]
-    ];
-    if (access.device_id) constraints.push(["device_id", "=", access.device_id]);
-
     const events = await this.loadObjects<AccessEvent>(device, settings, {
       object: "access_events",
       fields: ["id", "event", "type", "device_id", "timestamp"],
-      where: where("access_events", constraints),
-      order: ["timestamp", "ascending", "id", "ascending"],
-      limit: 20
-    }, true);
-    return events
-      .map(normalizeAccessEvent)
-      .filter((event): event is NormalizedAccessEvent => Boolean(event))
-      .filter((event) => ["TURN_LEFT", "TURN_RIGHT", "GIVE_UP"].includes(event.type))
-      .filter((event) => !this.store.hasProcessedControlIdAccess(`poll:${keyFor(device)}:turn:${event.id}`))
-      .sort((left, right) => {
-        const leftAfter = left.timestamp >= access.time ? 0 : 1;
-        const rightAfter = right.timestamp >= access.time ? 0 : 1;
-        return leftAfter - rightAfter || Math.abs(left.timestamp - access.time) - Math.abs(right.timestamp - access.time);
-      })[0];
-  }
-
-  private async loadUser(device: ControlIdDeviceConfig, settings: Settings, userId: number): Promise<NormalizedControlIdUser> {
-    const cacheKey = `${keyFor(device)}:${userId}`;
-    const cached = this.users.get(cacheKey);
-    if (cached) return cached;
-    const users = await this.loadObjects<ControlIdUser>(device, settings, {
-      object: "users",
-      fields: ["id", "registration", "name"],
-      where: where("users", [["id", "=", userId]]),
+      order: ["id", "descending"],
       limit: 1
-    }, true);
-    const rawUser = users[0];
-    if (!rawUser) throw new Error(`Usuário Control iD ${userId} não encontrado em ${device.name}.`);
-    const id = Number(rawUser.id);
-    if (!Number.isFinite(id)) throw new Error(`Usuário Control iD ${userId} retornou um ID inválido em ${device.name}.`);
-    const user: NormalizedControlIdUser = {
-      id,
-      registration: String(rawUser.registration ?? ""),
-      name: String(rawUser.name ?? "")
-    };
-    this.users.set(cacheKey, user);
-    return user;
+    });
+    const event = events[0];
+    const eventId = Number(event?.id) || 0;
+    const key = keyFor(device);
+    const previous = this.lastEventIds.get(key);
+    this.lastEventIds.set(key, eventId);
+
+    const turn = normalizeTurn(event?.type);
+    this.registerContact(device, "/load_objects.fcgi (diagnóstico direto)", turn);
+    if (previous === undefined) {
+      this.log("system", `${device.name} conectada para diagnóstico`, {
+        address: baseUrl(device),
+        latestAccessEventId: eventId,
+        detail: "As identidades e matrículas são lidas no monitor central do iDSecure."
+      });
+    } else if (eventId > previous && event) {
+      this.log("device-in", `${device.name}: evento físico observado`, { accessEvent: event });
+    }
   }
 
   private async loadObjects<T>(
     device: ControlIdDeviceConfig,
     settings: Settings,
-    body: Record<string, unknown>,
-    logTraffic: boolean
+    body: Record<string, unknown>
   ): Promise<T[]> {
     let session = await this.sessionFor(device, settings);
     try {
-      return await this.requestObjects<T>(device, session, body, logTraffic);
+      return await this.requestObjects<T>(device, session, body);
     } catch (error) {
       if (!isSessionError(error)) throw error;
       this.sessions.delete(keyFor(device));
       session = await this.sessionFor(device, settings);
-      return this.requestObjects<T>(device, session, body, logTraffic);
+      return this.requestObjects<T>(device, session, body);
     }
   }
 
   private async requestObjects<T>(
     device: ControlIdDeviceConfig,
     session: string,
-    body: Record<string, unknown>,
-    logTraffic: boolean
+    body: Record<string, unknown>
   ): Promise<T[]> {
-    const pathname = "/load_objects.fcgi";
-    if (logTraffic) this.log("device-out", `Ponte ID → ${device.name} ${pathname}`, body);
-    const result = await this.request(device, `${pathname}?session=${encodeURIComponent(session)}`, body);
+    const result = await this.request(
+      device,
+      `/load_objects.fcgi?session=${encodeURIComponent(session)}`,
+      body
+    );
     const objectName = String(body.object);
     const objects = result[objectName];
     if (!Array.isArray(objects)) throw new Error(`Resposta inválida de ${device.name}: coleção ${objectName} ausente.`);
-    if (logTraffic) this.log("device-in", `${device.name} → Ponte ID ${pathname}`, result);
     return objects as T[];
   }
 
@@ -315,7 +127,6 @@ export class ControlIdPollingService {
     const key = keyFor(device);
     const current = this.sessions.get(key);
     if (current) return current;
-
     this.log("device-out", `Ponte ID → ${device.name} /login.fcgi`, {
       address: baseUrl(device),
       login: settings.controlIdUsername,
@@ -363,7 +174,7 @@ export class ControlIdPollingService {
   private registerContact(
     device: ControlIdDeviceConfig,
     path: string,
-    turn?: string
+    turn?: "TURN_LEFT" | "TURN_RIGHT"
   ): void {
     this.onDeviceContact({
       key: `poll:${keyFor(device)}`,
@@ -389,60 +200,18 @@ export class ControlIdPollingService {
   }
 }
 
-function where(object: string, values: Array<[string, string, string | number]>): WhereClause[] {
-  return values.map(([field, operator, value], index) => ({
-    object,
-    field,
-    operator,
-    value,
-    ...(index < values.length - 1 ? { connector: ") AND (" } : {})
-  }));
-}
-
-function directionForTurn(turn: string, settings: Settings): Direction {
-  if (turn === "TURN_LEFT") return settings.turnLeftDirection;
-  if (turn === "TURN_RIGHT") return settings.turnRightDirection;
-  return settings.direction;
-}
-
-function normalizeAccessLog(value: AccessLog): NormalizedAccessLog | undefined {
-  const id = Number(value.id);
-  const time = Number(value.time);
-  const event = Number(value.event);
-  if (!Number.isFinite(id) || !Number.isFinite(time) || !Number.isFinite(event) || id <= 0 || time <= 0) return undefined;
-  const deviceId = Number(value.device_id);
-  const userId = Number(value.user_id);
-  return {
-    id,
-    time,
-    event,
-    ...(Number.isFinite(deviceId) && deviceId > 0 ? { device_id: deviceId } : {}),
-    ...(Number.isFinite(userId) && userId > 0 ? { user_id: userId } : {})
-  };
-}
-
-function normalizeAccessEvent(value: AccessEvent): NormalizedAccessEvent | undefined {
-  const id = Number(value.id);
-  const timestamp = Number(value.timestamp);
-  if (!Number.isFinite(id) || !Number.isFinite(timestamp) || id <= 0 || timestamp <= 0) return undefined;
-  const deviceId = Number(value.device_id);
-  return {
-    id,
-    timestamp,
-    event: String(value.event ?? "").toLowerCase(),
-    type: String(value.type ?? "").trim().toUpperCase().replace(/[\s-]+/g, "_"),
-    ...(Number.isFinite(deviceId) && deviceId > 0 ? { device_id: deviceId } : {})
-  };
-}
-
-function keyFor(device: ControlIdDeviceConfig): string {
-  return `${device.host}:${device.port}`;
-}
-
 function baseUrl(device: ControlIdDeviceConfig): string {
-  return `http://${device.host}:${device.port}`;
+  const host = device.host.includes(":") && !device.host.startsWith("[") ? `[${device.host}]` : device.host;
+  return `http://${host}:${device.port}`;
+}
+
+function keyFor(device: ControlIdDeviceConfig): string { return `${device.host}:${device.port}`; }
+
+function normalizeTurn(value: unknown): "TURN_LEFT" | "TURN_RIGHT" | undefined {
+  const normalized = String(value ?? "").trim().replaceAll(" ", "_").toUpperCase();
+  return normalized === "TURN_LEFT" || normalized === "TURN_RIGHT" ? normalized : undefined;
 }
 
 function isSessionError(error: unknown): boolean {
-  return /session|sessão|invalid.*token|not logged/i.test(error instanceof Error ? error.message : String(error));
+  return error instanceof Error && /invalid session|sess[aã]o.*inv[aá]lida|sess[aã]o.*expirada/i.test(error.message);
 }

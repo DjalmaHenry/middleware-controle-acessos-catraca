@@ -15,6 +15,8 @@ export interface Settings {
   activeSoftBaseUrl: string;
   activeSoftToken: string;
   idSecureBaseUrl: string;
+  idSecureUsername: string;
+  idSecurePassword: string;
   controlIdMode: ControlIdMode;
   controlIdUsername: string;
   controlIdPassword: string;
@@ -95,12 +97,14 @@ export interface ControlIdDeviceContact {
 
 export interface AppState {
   appVersion: string;
-  settings: Omit<Settings, "activeSoftToken" | "controlIdPassword"> & {
+  settings: Omit<Settings, "activeSoftToken" | "controlIdPassword" | "idSecurePassword"> & {
     tokenConfigured: boolean;
     controlIdPasswordConfigured: boolean;
+    idSecurePasswordConfigured: boolean;
   };
   listener: { running: boolean; port: number; error?: string };
   controlId: { devices: ControlIdDeviceContact[] };
+  idSecure: { status: "unknown" | "online" | "offline"; lastSeenAt?: string; message?: string };
   activeSoft: { status: "unknown" | "online" | "offline"; message?: string };
   students: Student[];
   recentAccesses: AccessRecord[];
@@ -116,6 +120,8 @@ export interface SaveSettingsInput {
   activeSoftBaseUrl: string;
   activeSoftToken?: string;
   idSecureBaseUrl: string;
+  idSecureUsername: string;
+  idSecurePassword?: string;
   controlIdMode: ControlIdMode;
   controlIdUsername: string;
   controlIdPassword?: string;

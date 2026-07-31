@@ -6,11 +6,13 @@ import { AccessRecord, ControlIdDeviceConfig, IntegrationLog, IntegrationLogCate
 import { normalizeStudentSync } from "./student-cache-check";
 
 interface PersistedData {
-  settings: Omit<Settings, "activeSoftToken" | "controlIdPassword"> & {
+  settings: Omit<Settings, "activeSoftToken" | "controlIdPassword" | "idSecurePassword"> & {
     encryptedToken?: string;
     plainToken?: string;
     encryptedControlIdPassword?: string;
     plainControlIdPassword?: string;
+    encryptedIdSecurePassword?: string;
+    plainIdSecurePassword?: string;
   };
   students: Student[];
   studentSync?: StudentSyncState;
@@ -20,6 +22,7 @@ interface PersistedData {
   controlIdMappings: Record<string, string>;
   pendingControlIdAccesses: Record<string, { userId: number; time: number; registration?: string }>;
   controlIdPollingCursors: Record<string, number>;
+  idSecureMonitorCursor?: number;
   processedControlIdAccesses: Record<string, string>;
 }
 
@@ -28,6 +31,7 @@ const defaults: PersistedData = {
     configured: false,
     activeSoftBaseUrl: "https://siga01.activesoft.com.br",
     idSecureBaseUrl: "https://192.168.1.2:30443",
+    idSecureUsername: "",
     controlIdMode: "polling",
     controlIdUsername: "admin",
     controlIdDevices: [
@@ -49,6 +53,7 @@ const defaults: PersistedData = {
   controlIdMappings: {},
   pendingControlIdAccesses: {},
   controlIdPollingCursors: {},
+  idSecureMonitorCursor: undefined,
   processedControlIdAccesses: {}
 };
 
@@ -67,20 +72,25 @@ export class JsonStore {
 
   getSettings(): Settings {
     const {
-      encryptedToken, plainToken, encryptedControlIdPassword, plainControlIdPassword, ...settings
+      encryptedToken, plainToken,
+      encryptedControlIdPassword, plainControlIdPassword,
+      encryptedIdSecurePassword, plainIdSecurePassword,
+      ...settings
     } = this.data.settings;
     return {
       ...settings,
       activeSoftToken: decryptSecret(encryptedToken, plainToken),
-      controlIdPassword: decryptSecret(encryptedControlIdPassword, plainControlIdPassword)
+      controlIdPassword: decryptSecret(encryptedControlIdPassword, plainControlIdPassword),
+      idSecurePassword: decryptSecret(encryptedIdSecurePassword, plainIdSecurePassword)
     };
   }
 
   saveSettings(settings: Settings): void {
-    const { activeSoftToken, controlIdPassword, ...rest } = settings;
+    const { activeSoftToken, controlIdPassword, idSecurePassword, ...rest } = settings;
     const activeSoftSecret = encryptSecret("Token", activeSoftToken);
     const controlIdSecret = encryptSecret("ControlIdPassword", controlIdPassword);
-    this.data.settings = { ...rest, ...activeSoftSecret, ...controlIdSecret };
+    const idSecureSecret = encryptSecret("IdSecurePassword", idSecurePassword);
+    this.data.settings = { ...rest, ...activeSoftSecret, ...controlIdSecret, ...idSecureSecret };
     this.persist();
   }
 
@@ -146,6 +156,11 @@ export class JsonStore {
   }
   saveControlIdPollingCursor(deviceKey: string, cursor: number): void {
     this.data.controlIdPollingCursors[deviceKey] = cursor;
+    this.persist();
+  }
+  getIdSecureMonitorCursor(): number | undefined { return this.data.idSecureMonitorCursor; }
+  saveIdSecureMonitorCursor(cursor: number): void {
+    this.data.idSecureMonitorCursor = cursor;
     this.persist();
   }
   hasProcessedControlIdAccess(sourceId: string): boolean {
@@ -219,6 +234,9 @@ function normalizePersistedData(loaded: Partial<PersistedData>): PersistedData {
     controlIdPollingCursors: loaded.controlIdPollingCursors && typeof loaded.controlIdPollingCursors === "object"
       ? loaded.controlIdPollingCursors
       : {},
+    idSecureMonitorCursor: typeof loaded.idSecureMonitorCursor === "number"
+      ? loaded.idSecureMonitorCursor
+      : undefined,
     processedControlIdAccesses: loaded.processedControlIdAccesses && typeof loaded.processedControlIdAccesses === "object"
       ? loaded.processedControlIdAccesses
       : {}
@@ -237,6 +255,9 @@ function normalizeSettings(value: unknown): PersistedData["settings"] {
     idSecureBaseUrl: typeof source.idSecureBaseUrl === "string"
       ? source.idSecureBaseUrl
       : defaults.settings.idSecureBaseUrl,
+    idSecureUsername: typeof source.idSecureUsername === "string"
+      ? source.idSecureUsername
+      : defaults.settings.idSecureUsername,
     controlIdMode: source.controlIdMode === "listener" ? "listener" : "polling",
     controlIdUsername: typeof source.controlIdUsername === "string"
       ? source.controlIdUsername
@@ -253,7 +274,9 @@ function normalizeSettings(value: unknown): PersistedData["settings"] {
     ...(typeof source.encryptedToken === "string" ? { encryptedToken: source.encryptedToken } : {}),
     ...(typeof source.plainToken === "string" ? { plainToken: source.plainToken } : {}),
     ...(typeof source.encryptedControlIdPassword === "string" ? { encryptedControlIdPassword: source.encryptedControlIdPassword } : {}),
-    ...(typeof source.plainControlIdPassword === "string" ? { plainControlIdPassword: source.plainControlIdPassword } : {})
+    ...(typeof source.plainControlIdPassword === "string" ? { plainControlIdPassword: source.plainControlIdPassword } : {}),
+    ...(typeof source.encryptedIdSecurePassword === "string" ? { encryptedIdSecurePassword: source.encryptedIdSecurePassword } : {}),
+    ...(typeof source.plainIdSecurePassword === "string" ? { plainIdSecurePassword: source.plainIdSecurePassword } : {})
   };
 }
 
@@ -280,7 +303,7 @@ function decryptSecret(encrypted?: string, plain?: string): string {
   return plain ?? "";
 }
 
-function encryptSecret(name: "Token" | "ControlIdPassword", value: string): Record<string, string> {
+function encryptSecret(name: "Token" | "ControlIdPassword" | "IdSecurePassword", value: string): Record<string, string> {
   const encryptedKey = `encrypted${name}`;
   const plainKey = `plain${name}`;
   return safeStorage.isEncryptionAvailable()

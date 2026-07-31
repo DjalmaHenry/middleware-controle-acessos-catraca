@@ -12,6 +12,7 @@ import { InstallationService } from "./installation-service";
 import { PhotoService } from "./photo-service";
 import { enableAutoStart, wasStartedAutomatically } from "./startup";
 import { probePonteListener } from "./listener-health";
+import { IdSecureMonitorService, IdSecureMonitorStatus } from "./idsecure-monitor";
 
 let window: BrowserWindow | null = null;
 let tray: Tray | null = null;
@@ -20,15 +21,17 @@ let activeSoft: ActiveSoftClient;
 let accessService: AccessService;
 let controlIdServer: ControlIdServer;
 let controlIdPolling: ControlIdPollingService;
+let idSecureMonitor: IdSecureMonitorService;
 let integrationLog: IntegrationLogger;
 let installationService: InstallationService;
 let photoService: PhotoService;
 let installationReport: InstallationReport | undefined;
 let listenerState: AppState["listener"] = { running: false, port: 8787 };
 let activeSoftState: AppState["activeSoft"] = { status: "unknown" };
+let idSecureState: IdSecureMonitorStatus = { status: "unknown" };
 let listenerRestartPromise: Promise<void> | undefined;
 const controlIdDevices = new Map<string, ControlIdDeviceContact>();
-const observedControlIdTurns = new Set<"left" | "right">();
+const observedAccessDirections = new Set<"E" | "S">();
 let quitting = false;
 
 const gotLock = app.requestSingleInstanceLock();
@@ -64,11 +67,20 @@ async function bootstrap(): Promise<void> {
     integrationLog,
     registerControlIdContact
   );
+  idSecureMonitor = new IdSecureMonitorService(
+    accessService,
+    store,
+    () => store.getSettings(),
+    integrationLog,
+    (status) => { idSecureState = status; broadcastState(); },
+    (direction) => { observedAccessDirections.add(direction); }
+  );
   installationService = new InstallationService({
     store,
     activeSoft,
     controlIdDevices: () => [...controlIdDevices.values()],
-    observedControlIdTurns: () => [...observedControlIdTurns],
+    observedAccessDirections: () => [...observedAccessDirections],
+    idSecureMonitor,
     networkAddresses: localIpv4Addresses,
     ensureListener: ensureListenerHealthy,
     ensureControlIdTransport: configureControlIdTransport,
@@ -78,6 +90,7 @@ async function bootstrap(): Promise<void> {
   createTray();
   createWindow();
   await configureControlIdTransport();
+  await idSecureMonitor.restart();
   integrationLog("system", "Ponte ID iniciado", {
     version: app.getVersion(),
     platform: process.platform,
@@ -124,7 +137,7 @@ function showWindow(): void { window?.show(); window?.focus(); }
 
 function state(): AppState {
   const settings = store.getSettings();
-  const { activeSoftToken, controlIdPassword, ...publicSettings } = settings;
+  const { activeSoftToken, controlIdPassword, idSecurePassword, ...publicSettings } = settings;
   const students = store.getStudents();
   const studentSync = store.getStudentSync();
   const visibleStudents = studentSync ? students : [];
@@ -133,10 +146,12 @@ function state(): AppState {
     settings: {
       ...publicSettings,
       tokenConfigured: Boolean(activeSoftToken),
-      controlIdPasswordConfigured: Boolean(controlIdPassword)
+      controlIdPasswordConfigured: Boolean(controlIdPassword),
+      idSecurePasswordConfigured: Boolean(idSecurePassword)
     },
     listener: listenerState,
     controlId: { devices: [...controlIdDevices.values()] },
+    idSecure: idSecureState,
     activeSoft: activeSoftState,
     students: visibleStudents,
     recentAccesses: store.getRecentAccesses(),
@@ -160,7 +175,6 @@ async function restartListener(): Promise<void> {
 async function restartListenerNow(): Promise<void> {
   const port = store.getSettings().listenerPort;
   controlIdDevices.clear();
-  observedControlIdTurns.clear();
   try {
     const actualPort = await controlIdServer.start(port);
     listenerState = { running: true, port: actualPort };
@@ -245,11 +259,14 @@ function registerIpc(): void {
       controlIdDevices,
       listenerPort,
       activeSoftToken: input.activeSoftToken?.trim() || current.activeSoftToken,
-      controlIdPassword: input.controlIdPassword?.trim() || current.controlIdPassword
+      controlIdPassword: input.controlIdPassword?.trim() || current.controlIdPassword,
+      idSecureUsername: input.idSecureUsername.trim(),
+      idSecurePassword: input.idSecurePassword?.trim() || current.idSecurePassword
     };
     store.saveSettings(settings);
     enableAutoStart();
     await configureControlIdTransport();
+    await idSecureMonitor.restart();
     await synchronize();
     return state();
   });
@@ -277,6 +294,7 @@ function registerIpc(): void {
 app.on("before-quit", () => {
   quitting = true;
   controlIdPolling?.stop();
+  idSecureMonitor?.stop();
   void controlIdServer?.stop();
 });
 app.on("window-all-closed", () => { /* resident process stays in the tray */ });
@@ -291,7 +309,6 @@ function localIpv4Addresses(): string[] {
 }
 
 function registerControlIdContact(contact: ControlIdDeviceContact): void {
-  if (contact.observedTurn) observedControlIdTurns.add(contact.observedTurn);
   controlIdDevices.set(contact.key, contact);
   if (controlIdDevices.size > 50) {
     const oldest = [...controlIdDevices.values()]

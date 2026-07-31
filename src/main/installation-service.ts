@@ -1,6 +1,5 @@
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { request as httpsRequest } from "node:https";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -11,6 +10,7 @@ import { ControlIdDeviceContact, InstallationCheck, InstallationReport } from ".
 import { enableAutoStart, isAutoStartEnabled } from "./startup";
 import { buildInstallationLog } from "./installation-log";
 import { buildStudentCacheCheck } from "./student-cache-check";
+import { IdSecureMonitorService } from "./idsecure-monitor";
 
 const execFileAsync = promisify(execFile);
 const FIREWALL_RULE_NAME = "Ponte ID - Control iD";
@@ -20,7 +20,8 @@ interface InstallationDependencies {
   store: JsonStore;
   activeSoft: ActiveSoftClient;
   controlIdDevices: () => ControlIdDeviceContact[];
-  observedControlIdTurns: () => Array<"left" | "right">;
+  observedAccessDirections: () => Array<"E" | "S">;
+  idSecureMonitor: Pick<IdSecureMonitorService, "testConnection">;
   networkAddresses: () => string[];
   ensureListener: () => Promise<{ running: boolean; port: number; error?: string }>;
   ensureControlIdTransport: () => Promise<void>;
@@ -74,7 +75,7 @@ export class InstallationService {
     const students = this.dependencies.store.getStudents();
     const studentSync = this.dependencies.store.getStudentSync();
     const devices = this.dependencies.controlIdDevices();
-    const observedTurns = this.dependencies.observedControlIdTurns();
+    const observedDirections = this.dependencies.observedAccessDirections();
 
     const configuredDevices = settings.controlIdDevices.filter((device) => device.enabled);
     const pollingConfigured = Boolean(settings.controlIdUsername && settings.controlIdPassword && configuredDevices.length);
@@ -183,7 +184,25 @@ export class InstallationService {
 
     checks.push(buildStudentCacheCheck(students, studentSync));
 
-    checks.push(await validateIdSecure(settings.idSecureBaseUrl));
+    try {
+      await this.dependencies.idSecureMonitor.testConnection();
+      checks.push({
+        id: "idsecure",
+        title: "Monitor do iDSecure",
+        status: "pass",
+        blocking: true,
+        detail: "Login e leitura de acessos do painel Enterprise confirmados."
+      });
+    } catch (error) {
+      checks.push({
+        id: "idsecure",
+        title: "Monitor do iDSecure",
+        status: "fail",
+        blocking: true,
+        detail: error instanceof Error ? error.message : String(error),
+        resolution: "Em Configurações, informe o endereço, usuário e senha usados no painel geral do iDSecure."
+      });
+    }
 
     const relevantDevices = polling
       ? devices.filter((device) => device.key.startsWith("poll:"))
@@ -201,9 +220,9 @@ export class InstallationService {
       : recentDevices.length > 0;
     checks.push({
       id: "device-event",
-      title: "Comunicação da catraca",
-      status: devicesReady ? "pass" : "fail",
-      blocking: true,
+      title: "Diagnóstico direto das catracas",
+      status: devicesReady ? "pass" : "warning",
+      blocking: false,
       detail: devicesReady
         ? `${recentDevices.length} ${recentDevices.length === 1 ? "catraca consultada" : "catracas consultadas"}; último contato em ${new Date(latestDevice!.lastSeenAt).toLocaleString("pt-BR")}.`
         : polling && !pollingConfigured
@@ -212,11 +231,11 @@ export class InstallationService {
           ? `Sem resposta recente de: ${missingDevices.map((device) => `${device.name} (${device.host}:${device.port})`).join(", ")}.`
         : latestDevice
           ? `A última comunicação ocorreu em ${new Date(latestDevice.lastSeenAt).toLocaleString("pt-BR")} e já está inativa.`
-          : `O receptor local está pronto, mas nenhuma catraca enviou notificações. O painel iDSecure em ${settings.idSecureBaseUrl} não encaminha esses eventos automaticamente.`,
+          : "Nenhuma catraca respondeu diretamente. O fluxo de presença usa o monitor central do iDSecure.",
       resolution: devicesReady
         ? undefined
         : polling
-          ? "Confirme os IPs, porta 80 e credenciais em Configurações. O Console mostra o erro exato de cada dispositivo."
+          ? "Confirme os IPs, porta 80 e credenciais das catracas. Essa consulta é diagnóstica e não substitui o monitor iDSecure."
           : `No iDSecure, abra Acesso → Dispositivos, obtenha o IP de uma catraca e configure o Monitor dela para http://IP-DESTE-PC:${listener.port}/api/notifications. Depois faça uma passagem de teste.`
     });
 
@@ -234,28 +253,18 @@ export class InstallationService {
         : "No iDSecure, confira em Cadastros → Pessoas se o campo Matrícula/Registro contém a matrícula ActiveSoft. Uma atualização de usuário recebida pelo Ponte ID fará o contador aumentar."
     });
 
-    const directionsDiffer = settings.turnLeftDirection !== settings.turnRightDirection;
-    const observedBothTurns = observedTurns.includes("left") && observedTurns.includes("right");
-    const directionsValidated = devicesReady && observedBothTurns && directionsDiffer;
+    const observedBothDirections = observedDirections.includes("E") && observedDirections.includes("S");
     checks.push({
       id: "turn-directions",
-      title: "Calibração dos sentidos",
-      status: directionsValidated ? "pass" : "warning",
+      title: "Entrada e saída no iDSecure",
+      status: observedBothDirections ? "pass" : "warning",
       blocking: false,
-      detail: directionsValidated
-        ? `TURN LEFT e TURN RIGHT foram recebidos; configuração local: esquerda = ${directionName(settings.turnLeftDirection)}, direita = ${directionName(settings.turnRightDirection)}.`
-        : !devicesReady
-          ? "Não validado: nenhuma catraca comunicou com o Ponte ID nos últimos 2 minutos."
-          : !observedBothTurns
-            ? `Contato recebido, mas o teste físico ainda não observou os dois giros. Eventos observados: ${observedTurns.length ? observedTurns.map(turnName).join(", ") : "nenhum TURN LEFT/RIGHT"}.`
-            : "Os dois giros foram observados, mas estão configurados com o mesmo movimento.",
-      resolution: directionsValidated
+      detail: observedBothDirections
+        ? "O monitor central já informou acessos de Entrada e Saída."
+        : `Direções observadas no monitor: ${observedDirections.length ? observedDirections.map(directionName).join(", ") : "nenhuma passagem processada"}.`,
+      resolution: observedBothDirections
         ? undefined
-        : !devicesReady
-          ? "Conecte uma catraca e faça uma entrada e uma saída físicas antes de validar os sentidos."
-          : !observedBothTurns
-            ? "Faça uma passagem em cada sentido para o Ponte ID receber TURN LEFT e TURN RIGHT."
-            : "Nas Configurações, atribua movimentos diferentes para giro à esquerda e giro à direita."
+        : "Faça uma passagem autorizada de entrada e outra de saída; o Ponte ID usa diretamente o campo info do iDSecure."
     });
 
     const logResult = buildInstallationLog(checks);
@@ -313,51 +322,6 @@ export function firewallRemoteAddresses(idSecureBaseUrl: string): string[] {
     // LocalSubnet remains the safe fallback when the configured URL is invalid.
   }
   return [...new Set(addresses)];
-}
-
-async function validateIdSecure(baseUrl: string): Promise<InstallationCheck> {
-  const result = await probeIdSecure(baseUrl);
-  return {
-    id: "idsecure",
-    title: "Servidor iDSecure",
-    status: result.ok ? "pass" : "warning",
-    blocking: false,
-    detail: result.ok
-      ? `${result.url} está acessível${result.statusCode ? ` (HTTP ${result.statusCode})` : ""}. Esta é a interface central; não é a porta receptora do Ponte ID.`
-      : `Não foi possível alcançar ${result.url}: ${result.detail ?? "sem resposta"}.`,
-    resolution: result.ok
-      ? undefined
-      : "Confirme se o endereço do iDSecure está correto e se este computador está na rede 192.168.1.x. Esse aviso não substitui o teste da porta 8787."
-  };
-}
-
-export async function probeIdSecure(baseUrl: string, timeoutMs = 3_000): Promise<{
-  ok: boolean;
-  url: string;
-  statusCode?: number;
-  detail?: string;
-}> {
-  let target: URL;
-  try {
-    target = new URL(baseUrl);
-    if (target.protocol !== "https:") throw new Error("o endereço deve usar HTTPS");
-  } catch (error) {
-    return { ok: false, url: baseUrl, detail: error instanceof Error ? error.message : String(error) };
-  }
-
-  target.hash = "";
-  return new Promise((resolve) => {
-    const request = httpsRequest(target, {
-      method: "HEAD",
-      rejectUnauthorized: false
-    }, (response) => {
-      response.resume();
-      resolve({ ok: true, url: target.origin, statusCode: response.statusCode });
-    });
-    request.setTimeout(timeoutMs, () => request.destroy(new Error(`tempo limite de ${timeoutMs} ms excedido`)));
-    request.on("error", (error) => resolve({ ok: false, url: target.origin, detail: error.message }));
-    request.end();
-  });
 }
 
 async function validateFirewall(port: number): Promise<InstallationCheck> {
@@ -454,8 +418,4 @@ async function runPowerShell(script: string): Promise<string> {
 
 function directionName(direction: "E" | "S"): string {
   return direction === "E" ? "Entrada" : "Saída";
-}
-
-function turnName(turn: "left" | "right"): string {
-  return turn === "left" ? "TURN LEFT" : "TURN RIGHT";
 }
