@@ -5,6 +5,7 @@ import { IntegrationLogger } from "./integration-logger";
 import { JsonStore } from "./store";
 import { ControlIdDeviceContact, InstallationCheck, InstallationReport } from "../shared/types";
 import { enableAutoStart, isAutoStartEnabled } from "./startup";
+import { buildInstallationLog } from "./installation-log";
 
 const execFileAsync = promisify(execFile);
 const FIREWALL_RULE_NAME = "Ponte ID - Control iD";
@@ -194,15 +195,13 @@ export class InstallationService {
         : "Faça uma entrada e uma saída físicas e ajuste os sentidos nas Configurações."
     });
 
+    const logResult = buildInstallationLog(checks);
     const report: InstallationReport = {
       checkedAt: new Date().toISOString(),
-      ready: checks.every((check) => !check.blocking || check.status === "pass"),
+      ready: logResult.ready,
       checks
     };
-    this.dependencies.log(report.ready ? "system" : "error", report.ready ? "Instalação validada e pronta" : "Validação encontrou pendências", {
-      ready: report.ready,
-      checks: checks.map(({ id, status, detail }) => ({ id, status, detail }))
-    });
+    this.dependencies.log(report.ready ? "system" : "error", logResult.title, logResult.payload);
     return report;
   }
 }
