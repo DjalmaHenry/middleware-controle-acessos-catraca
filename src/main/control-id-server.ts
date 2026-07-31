@@ -1,7 +1,7 @@
 import { createServer, IncomingMessage, Server, ServerResponse } from "node:http";
 import { AddressInfo } from "node:net";
 import { AccessService } from "./access-service";
-import { Direction, Settings } from "../shared/types";
+import { ControlIdDeviceContact, Direction, Settings } from "../shared/types";
 import { IntegrationLogger } from "./integration-logger";
 import { JsonStore } from "./store";
 
@@ -14,7 +14,8 @@ export class ControlIdServer {
     private readonly accessService: AccessService,
     private readonly store: JsonStore,
     private readonly getSettings: () => Settings,
-    private readonly log: IntegrationLogger
+    private readonly log: IntegrationLogger,
+    private readonly onDeviceContact: (contact: ControlIdDeviceContact) => void = () => undefined
   ) {}
 
   async start(port: number): Promise<number> {
@@ -40,6 +41,19 @@ export class ControlIdServer {
       if (request.method !== "POST") return this.json(response, 404, { error: "Rota não encontrada" });
       const body = await this.readBody(request);
       const parsedBody = this.parseBody(request, body);
+      if (isControlIdPath(url.pathname)) {
+        const deviceId = stringValue(url.searchParams.get("device_id"))
+          || stringValue(parsedBody.device_id)
+          || stringValue((parsedBody.device as Record<string, unknown> | undefined)?.id);
+        const remoteAddress = normalizeRemoteAddress(request.socket.remoteAddress);
+        this.onDeviceContact({
+          key: deviceId ? `device:${deviceId}` : `address:${remoteAddress ?? "unknown"}`,
+          lastSeenAt: new Date().toISOString(),
+          path: url.pathname,
+          remoteAddress,
+          deviceId
+        });
+      }
       this.log("device-in", `${request.method} Control iD ${url.pathname}`, {
         query: Object.fromEntries(url.searchParams),
         body: parsedBody
@@ -157,4 +171,16 @@ export class ControlIdServer {
 
 function stringValue(value: unknown): string | undefined {
   return value === undefined || value === null || value === "" ? undefined : String(value);
+}
+
+function isControlIdPath(pathname: string): boolean {
+  return pathname === "/new_user_identified.fcgi"
+    || pathname === "/device_is_alive.fcgi"
+    || pathname === "/api/notifications/access_logs"
+    || pathname.startsWith("/api/notifications/");
+}
+
+function normalizeRemoteAddress(value?: string): string | undefined {
+  if (!value) return undefined;
+  return value.startsWith("::ffff:") ? value.slice(7) : value;
 }

@@ -2,6 +2,7 @@ const $ = (selector) => document.querySelector(selector);
 let appState;
 const photoCache = new Map();
 const photoRequests = new Map();
+const CONTROL_ID_ONLINE_WINDOW_MS = 2 * 60 * 1000;
 
 const titles = {
   dashboard: ["Monitor de acesso", "Acompanhe as entradas em tempo real"],
@@ -47,9 +48,7 @@ function render(state) {
     initialViewSelected = true;
     document.querySelector('.nav-item[data-view="settings"]').click();
   }
-  const listenerDot = $("#listener-dot");
-  listenerDot.className = `dot ${state.listener.running ? "ok" : "bad"}`;
-  $("#listener-status").textContent = state.listener.running ? `Ativo na porta ${state.listener.port}` : "Receptor parado";
+  renderControlIdStatus(state);
   const activeDot = $("#active-dot");
   activeDot.className = `dot ${state.settings.demoMode ? "warn" : state.activeSoft.status === "online" ? "ok" : state.activeSoft.status === "offline" ? "bad" : ""}`;
   $("#active-status").textContent = state.settings.demoMode ? "Modo demonstração" : state.activeSoft.status === "online" ? "Conectada" : state.activeSoft.status === "offline" ? "Sem conexão" : "Aguardando teste";
@@ -71,6 +70,50 @@ function render(state) {
   renderInstallationGuide(state);
   renderInstallationReport(state.installationReport);
   fillSettings(state);
+}
+
+function renderControlIdStatus(state) {
+  const dot = $("#listener-dot");
+  const status = $("#listener-status");
+  if (state.settings.demoMode) {
+    dot.className = "dot warn";
+    status.textContent = "Modo demonstração";
+    status.title = `Receptor local na porta ${state.listener.port}`;
+    return;
+  }
+  if (!state.listener.running) {
+    dot.className = "dot bad";
+    status.textContent = "Receptor parado";
+    status.title = state.listener.error || `Porta ${state.listener.port} indisponível`;
+    return;
+  }
+
+  const devices = state.controlId?.devices ?? [];
+  const now = Date.now();
+  const recent = devices.filter((device) => now - new Date(device.lastSeenAt).getTime() <= CONTROL_ID_ONLINE_WINDOW_MS);
+  const latest = [...devices].sort((left, right) => right.lastSeenAt.localeCompare(left.lastSeenAt))[0];
+  if (recent.length) {
+    dot.className = "dot ok";
+    status.textContent = `${recent.length} ${recent.length === 1 ? "catraca conectada" : "catracas conectadas"}`;
+    status.title = `Último contato: ${new Date(latest.lastSeenAt).toLocaleString("pt-BR")} · receptor na porta ${state.listener.port}`;
+    return;
+  }
+  if (latest) {
+    dot.className = "dot bad";
+    status.textContent = `Sem contato ${elapsedLabel(new Date(latest.lastSeenAt).getTime(), now)}`;
+    status.title = `Último contato: ${new Date(latest.lastSeenAt).toLocaleString("pt-BR")} · receptor ativo na porta ${state.listener.port}`;
+    return;
+  }
+  dot.className = "dot";
+  status.textContent = "Aguardando catraca";
+  status.title = `Receptor pronto na porta ${state.listener.port}, mas nenhuma catraca se comunicou`;
+}
+
+function elapsedLabel(then, now = Date.now()) {
+  const minutes = Math.max(1, Math.floor((now - then) / 60_000));
+  if (minutes < 60) return `há ${minutes} min`;
+  const hours = Math.floor(minutes / 60);
+  return `há ${hours} ${hours === 1 ? "hora" : "horas"}`;
 }
 
 const consoleLabels = {
@@ -271,3 +314,4 @@ $("#open-token-portal").addEventListener("click", async () => {
 
 window.ponte.onStateChanged(render);
 window.ponte.getState().then(render);
+setInterval(() => { if (appState) renderControlIdStatus(appState); }, 15_000);

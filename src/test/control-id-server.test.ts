@@ -89,3 +89,43 @@ test("ignora desistência da catraca", async () => {
     assert.deepEqual(registered, []);
   } finally { await server.stop(); }
 });
+
+test("sinaliza conexão somente após notificação real da Control iD", async () => {
+  const contacts: Array<{ key: string; path: string; deviceId?: string }> = [];
+  const service = { registerControlIdUser: async () => ({} as never) };
+  const store = {
+    saveControlIdMapping: () => undefined,
+    getControlIdRegistration: () => undefined,
+    savePendingControlIdAccess: () => undefined,
+    getPendingControlIdAccess: () => undefined,
+    removePendingControlIdAccess: () => undefined
+  };
+  const settings = () => ({ turnLeftDirection: "E", turnRightDirection: "S", direction: "E" });
+  const server = new ControlIdServer(
+    service as never,
+    store as never,
+    settings as never,
+    () => undefined,
+    (contact) => contacts.push(contact)
+  );
+  const port = await server.start(0);
+  try {
+    await fetch(`http://127.0.0.1:${port}/health`);
+    await fetch(`http://127.0.0.1:${port}/rota-desconhecida`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "{}"
+    });
+    assert.equal(contacts.length, 0);
+
+    await fetch(`http://127.0.0.1:${port}/api/notifications/device_is_alive?device_id=77`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "{}"
+    });
+    assert.equal(contacts.length, 1);
+    assert.equal(contacts[0].key, "device:77");
+    assert.equal(contacts[0].deviceId, "77");
+    assert.equal(contacts[0].path, "/api/notifications/device_is_alive");
+  } finally { await server.stop(); }
+});

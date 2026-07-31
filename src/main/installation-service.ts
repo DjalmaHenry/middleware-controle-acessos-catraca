@@ -4,15 +4,17 @@ import { promisify } from "node:util";
 import { ActiveSoftClient } from "./active-soft";
 import { IntegrationLogger } from "./integration-logger";
 import { JsonStore } from "./store";
-import { InstallationCheck, InstallationReport } from "../shared/types";
+import { ControlIdDeviceContact, InstallationCheck, InstallationReport } from "../shared/types";
 
 const execFileAsync = promisify(execFile);
 const FIREWALL_RULE_NAME = "Ponte ID - Control iD";
+const CONTROL_ID_ONLINE_WINDOW_MS = 2 * 60 * 1000;
 
 interface InstallationDependencies {
   store: JsonStore;
   activeSoft: ActiveSoftClient;
   listenerState: () => { running: boolean; port: number; error?: string };
+  controlIdDevices: () => ControlIdDeviceContact[];
   networkAddresses: () => string[];
   restartListener: () => Promise<void>;
   log: IntegrationLogger;
@@ -56,7 +58,7 @@ export class InstallationService {
     const listener = this.dependencies.listenerState();
     const addresses = this.dependencies.networkAddresses();
     const students = this.dependencies.store.getStudents();
-    const logs = this.dependencies.store.getIntegrationLogs();
+    const devices = this.dependencies.controlIdDevices();
 
     checks.push({
       id: "listener",
@@ -150,16 +152,21 @@ export class InstallationService {
       resolution: students.length > 0 ? undefined : "Corrija a conexão ActiveSoft e clique em Sincronizar."
     });
 
-    const latestDeviceEvent = [...logs].reverse().find((entry) => entry.category === "device-in");
+    const recentDevices = devices.filter((device) =>
+      Date.now() - new Date(device.lastSeenAt).getTime() <= CONTROL_ID_ONLINE_WINDOW_MS
+    );
+    const latestDevice = [...devices].sort((left, right) => right.lastSeenAt.localeCompare(left.lastSeenAt))[0];
     checks.push({
       id: "device-event",
       title: "Comunicação da catraca",
-      status: latestDeviceEvent ? "pass" : "fail",
+      status: recentDevices.length ? "pass" : "fail",
       blocking: true,
-      detail: latestDeviceEvent
-        ? `Último evento recebido em ${new Date(latestDeviceEvent.timestamp).toLocaleString("pt-BR")}: ${latestDeviceEvent.title}.`
-        : "O aplicativo ainda não recebeu nenhuma notificação Control iD.",
-      resolution: latestDeviceEvent ? undefined : `Configure o Monitor para http://IP-DESTE-PC:${listener.port}/api/notifications e faça uma passagem de teste.`
+      detail: recentDevices.length
+        ? `${recentDevices.length} ${recentDevices.length === 1 ? "catraca conectada" : "catracas conectadas"}; último contato em ${new Date(latestDevice!.lastSeenAt).toLocaleString("pt-BR")}.`
+        : latestDevice
+          ? `A última comunicação ocorreu em ${new Date(latestDevice.lastSeenAt).toLocaleString("pt-BR")} e já está inativa.`
+          : "O aplicativo ainda não recebeu nenhuma notificação Control iD.",
+      resolution: recentDevices.length ? undefined : `Configure o Monitor para http://IP-DESTE-PC:${listener.port}/api/notifications e confirme o heartbeat ou faça uma passagem de teste.`
     });
 
     const mappingCount = this.dependencies.store.getControlIdMappingCount();

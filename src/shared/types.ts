@@ -66,9 +66,18 @@ export interface InstallationReport {
   checks: InstallationCheck[];
 }
 
+export interface ControlIdDeviceContact {
+  key: string;
+  lastSeenAt: string;
+  path: string;
+  remoteAddress?: string;
+  deviceId?: string;
+}
+
 export interface AppState {
   settings: Omit<Settings, "activeSoftToken"> & { tokenConfigured: boolean };
   listener: { running: boolean; port: number; error?: string };
+  controlId: { devices: ControlIdDeviceContact[] };
   activeSoft: { status: "unknown" | "online" | "offline"; message?: string };
   students: Student[];
   recentAccesses: AccessRecord[];

@@ -5,7 +5,7 @@ import { ActiveSoftClient } from "./active-soft";
 import { AccessService } from "./access-service";
 import { ControlIdServer } from "./control-id-server";
 import { JsonStore } from "./store";
-import { AppState, InstallationReport, SaveSettingsInput, Settings } from "../shared/types";
+import { AppState, ControlIdDeviceContact, InstallationReport, SaveSettingsInput, Settings } from "../shared/types";
 import { createIntegrationLogger, IntegrationLogger } from "./integration-logger";
 import { InstallationService } from "./installation-service";
 import { PhotoService } from "./photo-service";
@@ -22,6 +22,7 @@ let photoService: PhotoService;
 let installationReport: InstallationReport | undefined;
 let listenerState: AppState["listener"] = { running: false, port: 8787 };
 let activeSoftState: AppState["activeSoft"] = { status: "unknown" };
+const controlIdDevices = new Map<string, ControlIdDeviceContact>();
 let quitting = false;
 
 const gotLock = app.requestSingleInstanceLock();
@@ -39,11 +40,18 @@ async function bootstrap(): Promise<void> {
   photoService = new PhotoService(integrationLog);
   activeSoft = new ActiveSoftClient(() => store.getSettings(), integrationLog);
   accessService = new AccessService(store, activeSoft, broadcastState, integrationLog);
-  controlIdServer = new ControlIdServer(accessService, store, () => store.getSettings(), integrationLog);
+  controlIdServer = new ControlIdServer(
+    accessService,
+    store,
+    () => store.getSettings(),
+    integrationLog,
+    registerControlIdContact
+  );
   installationService = new InstallationService({
     store,
     activeSoft,
     listenerState: () => listenerState,
+    controlIdDevices: () => [...controlIdDevices.values()],
     networkAddresses: localIpv4Addresses,
     restartListener,
     log: integrationLog
@@ -94,7 +102,9 @@ function state(): AppState {
   const { activeSoftToken, ...publicSettings } = settings;
   return {
     settings: { ...publicSettings, tokenConfigured: Boolean(activeSoftToken) },
-    listener: listenerState, activeSoft: activeSoftState,
+    listener: listenerState,
+    controlId: { devices: [...controlIdDevices.values()] },
+    activeSoft: activeSoftState,
     students: store.getStudents(),
     recentAccesses: store.getRecentAccesses(),
     pendingCount: store.getQueue().length,
@@ -110,6 +120,7 @@ function broadcastState(): void { if (window && !window.isDestroyed()) window.we
 
 async function restartListener(): Promise<void> {
   const port = store.getSettings().listenerPort;
+  controlIdDevices.clear();
   try {
     const actualPort = await controlIdServer.start(port);
     listenerState = { running: true, port: actualPort };
@@ -203,4 +214,14 @@ function localIpv4Addresses(): string[] {
     .filter((entry) => entry.family === "IPv4" && !entry.internal)
     .map((entry) => entry.address);
   return [...new Set(addresses)];
+}
+
+function registerControlIdContact(contact: ControlIdDeviceContact): void {
+  controlIdDevices.set(contact.key, contact);
+  if (controlIdDevices.size > 50) {
+    const oldest = [...controlIdDevices.values()]
+      .sort((left, right) => left.lastSeenAt.localeCompare(right.lastSeenAt))[0];
+    if (oldest) controlIdDevices.delete(oldest.key);
+  }
+  broadcastState();
 }
