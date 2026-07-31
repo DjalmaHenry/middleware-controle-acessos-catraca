@@ -1,6 +1,6 @@
 {
   "name": "ponte-id",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "Integração local entre catracas Control iD e ActiveSoft SIGA",
   "main": "dist/main/main.js",
   "author": "",
@@ -12,6 +12,7 @@
     "start": "electron .",
     "test": "npm run build && node --test dist/test/*.test.js",
     "build:windows": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File ./build-windows.ps1",
+    "build:windows:macos": "bash ./build-windows-macos.sh",
     "dist:win": "npm run build && electron-builder --win nsis --x64"
   },
   "devDependencies": {

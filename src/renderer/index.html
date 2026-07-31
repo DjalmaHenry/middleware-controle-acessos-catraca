@@ -6,6 +6,7 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' https: data:; style-src 'self'; script-src 'self'; connect-src 'self'">
   <title>Ponte ID</title>
   <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="settings-footer.css">
 </head>
 <body>
   <aside class="sidebar">
@@ -109,6 +110,7 @@
         <div class="form-section"><h2>Recepção da catraca</h2><p>A catraca deve alcançar este computador pela rede local.</p><div class="form-row"><label>Porta do receptor<input id="listener-port" type="number" min="1024" max="65535" required></label><label>Movimento sem direção conhecida<select id="direction"><option value="E">Entrada</option><option value="S">Saída</option></select></label></div><div class="form-row"><label>Giro à esquerda<select id="turn-left-direction"><option value="E">Entrada</option><option value="S">Saída</option></select></label><label>Giro à direita<select id="turn-right-direction"><option value="S">Saída</option><option value="E">Entrada</option></select></label></div><div class="mapping-note"><strong>Chave de identificação</strong><p>A matrícula da ActiveSoft é comparada ao campo <code>registration</code> da Control iD. O número interno <code>user_id</code> é usado apenas para localizar essa matrícula.</p></div></div>
         <div class="form-section"><h2>Funcionamento</h2><label class="switch-row"><span><strong>Iniciar com o Windows</strong><small>Sempre ativo. Inicia após o login e permanece na bandeja.</small></span><input id="auto-start" type="checkbox" checked disabled><i></i></label><label class="switch-row"><span><strong>Modo desenvolvedor</strong><small>Exibe Console e guia técnico de instalação.</small></span><input id="developer-mode" type="checkbox"><i></i></label></div>
         <div id="form-message" class="form-message"></div><button class="primary save" type="submit">Salvar configurações</button>
+        <footer class="settings-footer"><span>Ponte ID</span><strong id="app-version">Versão</strong></footer>
       </form>
     </section>
 

@@ -37,7 +37,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\build-windows.ps1
 O instalador será criado em:
 
 ```text
-release\Ponte ID Setup 0.1.5.exe
+release\Ponte ID Setup 0.1.6.exe
 ```
 
 Para executar cada etapa manualmente:
@@ -52,6 +52,22 @@ npm run dist:win
 Também é possível disparar manualmente o workflow `Gerar instalador Windows` no GitHub Actions. Após instalado, o aplicativo inicia com o Windows, permanece na bandeja do sistema e fecha a janela sem interromper o receptor.
 
 O instalador atual não possui certificado comercial de assinatura de código. Até que um certificado seja configurado, o Windows SmartScreen pode solicitar confirmação adicional na primeira execução.
+
+### Gerar no macOS
+
+Em um Mac com Node.js 22 LTS, execute na raiz do projeto:
+
+```bash
+./build-windows-macos.sh
+```
+
+O script instala as dependências, executa os testes e gera o mesmo instalador NSIS x64 em:
+
+```text
+release/Ponte ID Setup 0.1.6.exe
+```
+
+Em Macs com Apple Silicon, o script verifica e instala o Rosetta 2 automaticamente na primeira execução. Esta build não requer Docker nem Wine. O comando equivalente pelo npm é `npm run build:windows:macos`.
 
 ## Persistência e inicialização
 

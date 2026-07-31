@@ -112,6 +112,7 @@ function state(): AppState {
   const studentSync = store.getStudentSync();
   const visibleStudents = studentSync ? students : [];
   return {
+    appVersion: app.getVersion(),
     settings: { ...publicSettings, tokenConfigured: Boolean(activeSoftToken) },
     listener: listenerState,
     controlId: { devices: [...controlIdDevices.values()] },

@@ -1,0 +1,14 @@
+.settings-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 24px;
+  padding-top: 16px;
+  border-top: 1px solid #e5e9e7;
+  color: #78867f;
+  font-size: 11px;
+}
+
+.settings-footer strong {
+  color: #405249;
+}

@@ -79,6 +79,7 @@ export interface ControlIdDeviceContact {
 }
 
 export interface AppState {
+  appVersion: string;
   settings: Omit<Settings, "activeSoftToken"> & { tokenConfigured: boolean };
   listener: { running: boolean; port: number; error?: string };
   controlId: { devices: ControlIdDeviceContact[] };

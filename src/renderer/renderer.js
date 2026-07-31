@@ -240,6 +240,7 @@ function resolveAccessPhoto(accessId) {
 }
 
 function fillSettings(state) {
+  $("#app-version").textContent = `Versão ${state.appVersion}`;
   if (document.activeElement?.closest("#settings-form")) return;
   $("#api-url").value = state.settings.activeSoftBaseUrl;
   $("#listener-port").value = state.settings.listenerPort;
