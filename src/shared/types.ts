@@ -1,10 +1,24 @@
 export type Direction = "E" | "S";
 
+export type ControlIdMode = "polling" | "listener";
+
+export interface ControlIdDeviceConfig {
+  id: string;
+  name: string;
+  host: string;
+  port: number;
+  enabled: boolean;
+}
+
 export interface Settings {
   configured: boolean;
   activeSoftBaseUrl: string;
   activeSoftToken: string;
   idSecureBaseUrl: string;
+  controlIdMode: ControlIdMode;
+  controlIdUsername: string;
+  controlIdPassword: string;
+  controlIdDevices: ControlIdDeviceConfig[];
   listenerPort: number;
   autoStart: boolean;
   direction: Direction;
@@ -81,7 +95,10 @@ export interface ControlIdDeviceContact {
 
 export interface AppState {
   appVersion: string;
-  settings: Omit<Settings, "activeSoftToken"> & { tokenConfigured: boolean };
+  settings: Omit<Settings, "activeSoftToken" | "controlIdPassword"> & {
+    tokenConfigured: boolean;
+    controlIdPasswordConfigured: boolean;
+  };
   listener: { running: boolean; port: number; error?: string };
   controlId: { devices: ControlIdDeviceContact[] };
   activeSoft: { status: "unknown" | "online" | "offline"; message?: string };
@@ -99,6 +116,10 @@ export interface SaveSettingsInput {
   activeSoftBaseUrl: string;
   activeSoftToken?: string;
   idSecureBaseUrl: string;
+  controlIdMode: ControlIdMode;
+  controlIdUsername: string;
+  controlIdPassword?: string;
+  controlIdDevices: ControlIdDeviceConfig[];
   listenerPort: number;
   autoStart: boolean;
   direction: Direction;

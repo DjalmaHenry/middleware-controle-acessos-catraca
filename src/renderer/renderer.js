@@ -71,6 +71,40 @@ function render(state) {
 function renderControlIdStatus(state) {
   const dot = $("#listener-dot");
   const status = $("#listener-status");
+  if (state.settings.controlIdMode === "polling") {
+    const configured = state.settings.controlIdDevices.filter((device) => device.enabled);
+    const devices = (state.controlId?.devices ?? []).filter((device) => device.key.startsWith("poll:"));
+    const now = Date.now();
+    const recent = devices.filter((device) => now - new Date(device.lastSeenAt).getTime() <= CONTROL_ID_ONLINE_WINDOW_MS);
+    const recentIds = new Set(recent.map((device) => device.deviceId));
+    const connected = configured.filter((device) => recentIds.has(device.id));
+    const latest = [...devices].sort((left, right) => right.lastSeenAt.localeCompare(left.lastSeenAt))[0];
+    if (!state.settings.controlIdPasswordConfigured) {
+      dot.className = "dot";
+      status.textContent = "Informe a senha";
+      status.title = "Configure a credencial administrativa das catracas";
+      return;
+    }
+    if (configured.length && connected.length === configured.length) {
+      dot.className = "dot ok";
+      status.textContent = `${connected.length} ${connected.length === 1 ? "catraca consultada" : "catracas consultadas"}`;
+      status.title = `Última consulta: ${new Date(latest.lastSeenAt).toLocaleString("pt-BR")}`;
+      return;
+    }
+    if (connected.length) {
+      dot.className = "dot warn";
+      status.textContent = `${connected.length} de ${configured.length} respondendo`;
+      status.title = "Abra a validação para identificar o dispositivo sem resposta";
+      return;
+    }
+    dot.className = "dot bad";
+    status.textContent = "Sem resposta das catracas";
+    status.title = latest
+      ? `Último contato ${elapsedLabel(new Date(latest.lastSeenAt).getTime(), now)}`
+      : "Confira IPs, porta, usuário e senha";
+    return;
+  }
+
   if (!state.listener.running) {
     dot.className = "dot bad";
     status.textContent = "Receptor parado";
@@ -130,15 +164,18 @@ function renderConsole(state) {
 }
 
 function renderInstallationGuide(state) {
-  $("#guide-port").textContent = state.listener.port;
+  const polling = state.settings.controlIdMode === "polling";
+  $("#guide-port").textContent = polling ? "Consulta ativa (saída)" : `Receptor TCP ${state.listener.port}`;
   $("#guide-idsecure").textContent = state.settings.idSecureBaseUrl;
   $("#guide-idsecure-step").textContent = state.settings.idSecureBaseUrl;
   $("#guide-addresses").textContent = state.networkAddresses.length
-    ? state.networkAddresses.map((address) => `${address}:${state.listener.port}`).join(" · ")
+    ? state.networkAddresses.map((address) => polling ? address : `${address}:${state.listener.port}`).join(" · ")
     : "Nenhum IPv4 de rede detectado";
   $("#guide-mappings").textContent = `${state.controlIdMappingCount} ${state.controlIdMappingCount === 1 ? "matrícula" : "matrículas"}`;
   const remoteScope = ["localsubnet", idSecureSubnet(state.settings.idSecureBaseUrl)].filter(Boolean).join(",");
-  $("#firewall-command").textContent = `netsh advfirewall firewall add rule name="Ponte ID - Control iD" dir=in action=allow protocol=TCP localport=${state.listener.port} profile=any remoteip=${remoteScope}`;
+  $("#firewall-command").textContent = polling
+    ? "Nenhuma regra de entrada é necessária no modo Consulta ativa."
+    : `netsh advfirewall firewall add rule name="Ponte ID - Control iD" dir=in action=allow protocol=TCP localport=${state.listener.port} profile=any remoteip=${remoteScope}`;
 }
 
 function idSecureSubnet(baseUrl) {
@@ -256,6 +293,13 @@ function fillSettings(state) {
   if (document.activeElement?.closest("#settings-form")) return;
   $("#api-url").value = state.settings.activeSoftBaseUrl;
   $("#idsecure-url").value = state.settings.idSecureBaseUrl;
+  $("#control-id-mode").value = state.settings.controlIdMode;
+  $("#control-id-username").value = state.settings.controlIdUsername;
+  $("#control-id-password-hint").textContent = state.settings.controlIdPasswordConfigured
+    ? "Senha armazenada com proteção do Windows."
+    : "Nenhuma senha configurada.";
+  renderControlIdDevices(state.settings.controlIdDevices);
+  updateControlIdModeVisibility();
   $("#listener-port").value = state.settings.listenerPort;
   $("#direction").value = state.settings.direction;
   $("#turn-left-direction").value = state.settings.turnLeftDirection;
@@ -263,6 +307,36 @@ function fillSettings(state) {
   $("#auto-start").checked = state.settings.autoStart;
   $("#developer-mode").checked = state.settings.developerMode;
   $("#token-hint").textContent = state.settings.tokenConfigured ? "Token armazenado com proteção do Windows." : "Nenhum token configurado.";
+}
+
+function renderControlIdDevices(devices) {
+  $("#control-id-devices").innerHTML = devices.map((device) => `
+    <div class="device-config-row" data-device-id="${escapeHtml(device.id)}">
+      <label class="device-enabled" title="Consultar esta catraca"><input type="checkbox" ${device.enabled ? "checked" : ""}><span></span></label>
+      <label>Nome<input class="device-name" type="text" value="${escapeHtml(device.name)}" required></label>
+      <label>IP ou host<input class="device-host" type="text" value="${escapeHtml(device.host)}" placeholder="192.168.1.189" required></label>
+      <label class="device-port">Porta<input type="number" min="1" max="65535" value="${Number(device.port) || 80}" required></label>
+      <button class="remove-device" type="button" title="Remover catraca" aria-label="Remover catraca">×</button>
+    </div>
+  `).join("");
+}
+
+function readControlIdDevices() {
+  return [...document.querySelectorAll(".device-config-row")].map((row, index) => ({
+    id: row.dataset.deviceId || `device-${Date.now()}-${index}`,
+    name: row.querySelector(".device-name").value.trim() || `Catraca ${index + 1}`,
+    host: row.querySelector(".device-host").value.trim().replace(/^https?:\/\//, "").replace(/\/$/, ""),
+    port: Number(row.querySelector(".device-port input").value),
+    enabled: row.querySelector(".device-enabled input").checked
+  }));
+}
+
+function updateControlIdModeVisibility() {
+  const polling = $("#control-id-mode").value === "polling";
+  $("#polling-settings").hidden = !polling;
+  $("#listener-settings").hidden = polling;
+  $("#polling-settings").querySelectorAll("input").forEach((input) => { input.disabled = !polling; });
+  $("#listener-settings").querySelectorAll("input").forEach((input) => { input.disabled = polling; });
 }
 
 $("#settings-form").addEventListener("submit", async (event) => {
@@ -273,24 +347,39 @@ $("#settings-form").addEventListener("submit", async (event) => {
     const state = await window.ponte.saveSettings({
       activeSoftBaseUrl: $("#api-url").value.trim(), activeSoftToken: $("#api-token").value.trim() || undefined,
       idSecureBaseUrl: $("#idsecure-url").value.trim(),
+      controlIdMode: $("#control-id-mode").value,
+      controlIdUsername: $("#control-id-username").value.trim(),
+      controlIdPassword: $("#control-id-password").value.trim() || undefined,
+      controlIdDevices: readControlIdDevices(),
       listenerPort: Number($("#listener-port").value), direction: $("#direction").value,
       turnLeftDirection: $("#turn-left-direction").value, turnRightDirection: $("#turn-right-direction").value,
       autoStart: true,
       developerMode: $("#developer-mode").checked
     });
-    $("#api-token").value = ""; render(state); message.textContent = "Configurações salvas.";
+    $("#api-token").value = ""; $("#control-id-password").value = ""; render(state); message.textContent = "Configurações salvas.";
   } catch (error) { message.className = "form-message error"; message.textContent = error.message; }
 });
 
 $("#sync-button").addEventListener("click", async () => { $("#sync-button").disabled = true; try { await window.ponte.synchronize(); } finally { $("#sync-button").disabled = false; } });
 $("#clear-console").addEventListener("click", () => window.ponte.clearLogs());
+$("#control-id-mode").addEventListener("change", updateControlIdModeVisibility);
+$("#add-control-id-device").addEventListener("click", () => {
+  const devices = readControlIdDevices();
+  devices.push({ id: `device-${Date.now()}`, name: `Catraca ${devices.length + 1}`, host: "", port: 80, enabled: true });
+  renderControlIdDevices(devices);
+});
+$("#control-id-devices").addEventListener("click", (event) => {
+  const button = event.target.closest(".remove-device");
+  if (!button) return;
+  button.closest(".device-config-row").remove();
+});
 $("#prepare-installation").addEventListener("click", () => runInstallationAction(
   () => window.ponte.prepareInstallation(),
-  "Preparando auto-início, receptor e Firewall. Aceite a solicitação do Windows, se aparecer."
+  "Preparando auto-início e verificando a comunicação configurada."
 ));
 $("#validate-installation").addEventListener("click", () => runInstallationAction(
   () => window.ponte.validateInstallation(),
-  "Executando verificações de rede, receptor, ActiveSoft, catraca e matrículas..."
+  "Executando verificações de rede, ActiveSoft, catracas e matrículas..."
 ));
 $("#token-guide-link").addEventListener("click", (event) => {
   event.preventDefault();

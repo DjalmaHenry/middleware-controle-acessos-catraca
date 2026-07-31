@@ -2,11 +2,16 @@ import { app, safeStorage } from "electron";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
-import { AccessRecord, IntegrationLog, IntegrationLogCategory, Settings, Student, StudentSyncState } from "../shared/types";
+import { AccessRecord, ControlIdDeviceConfig, IntegrationLog, IntegrationLogCategory, Settings, Student, StudentSyncState } from "../shared/types";
 import { normalizeStudentSync } from "./student-cache-check";
 
 interface PersistedData {
-  settings: Omit<Settings, "activeSoftToken"> & { encryptedToken?: string; plainToken?: string };
+  settings: Omit<Settings, "activeSoftToken" | "controlIdPassword"> & {
+    encryptedToken?: string;
+    plainToken?: string;
+    encryptedControlIdPassword?: string;
+    plainControlIdPassword?: string;
+  };
   students: Student[];
   studentSync?: StudentSyncState;
   recentAccesses: AccessRecord[];
@@ -14,6 +19,8 @@ interface PersistedData {
   integrationLogs: IntegrationLog[];
   controlIdMappings: Record<string, string>;
   pendingControlIdAccesses: Record<string, { userId: number; time: number; registration?: string }>;
+  controlIdPollingCursors: Record<string, number>;
+  processedControlIdAccesses: Record<string, string>;
 }
 
 const defaults: PersistedData = {
@@ -21,6 +28,12 @@ const defaults: PersistedData = {
     configured: false,
     activeSoftBaseUrl: "https://siga01.activesoft.com.br",
     idSecureBaseUrl: "https://192.168.1.2:30443",
+    controlIdMode: "polling",
+    controlIdUsername: "admin",
+    controlIdDevices: [
+      { id: "catraca-1", name: "CATRACA 1", host: "192.168.1.189", port: 80, enabled: true },
+      { id: "catraca-2", name: "CATRACA 2", host: "192.168.1.178", port: 80, enabled: true }
+    ],
     listenerPort: 8787,
     autoStart: true,
     direction: "E",
@@ -34,7 +47,9 @@ const defaults: PersistedData = {
   queue: [],
   integrationLogs: [],
   controlIdMappings: {},
-  pendingControlIdAccesses: {}
+  pendingControlIdAccesses: {},
+  controlIdPollingCursors: {},
+  processedControlIdAccesses: {}
 };
 
 export class JsonStore {
@@ -51,26 +66,21 @@ export class JsonStore {
   }
 
   getSettings(): Settings {
-    const { encryptedToken, plainToken, ...settings } = this.data.settings;
-    let activeSoftToken = "";
-    if (encryptedToken && safeStorage.isEncryptionAvailable()) {
-      try {
-        activeSoftToken = safeStorage.decryptString(Buffer.from(encryptedToken, "base64"));
-      } catch {
-        activeSoftToken = "";
-      }
-    } else if (plainToken) {
-      activeSoftToken = plainToken;
-    }
-    return { ...settings, activeSoftToken };
+    const {
+      encryptedToken, plainToken, encryptedControlIdPassword, plainControlIdPassword, ...settings
+    } = this.data.settings;
+    return {
+      ...settings,
+      activeSoftToken: decryptSecret(encryptedToken, plainToken),
+      controlIdPassword: decryptSecret(encryptedControlIdPassword, plainControlIdPassword)
+    };
   }
 
   saveSettings(settings: Settings): void {
-    const { activeSoftToken, ...rest } = settings;
-    const secret = safeStorage.isEncryptionAvailable()
-      ? { encryptedToken: safeStorage.encryptString(activeSoftToken).toString("base64") }
-      : { plainToken: activeSoftToken };
-    this.data.settings = { ...rest, ...secret };
+    const { activeSoftToken, controlIdPassword, ...rest } = settings;
+    const activeSoftSecret = encryptSecret("Token", activeSoftToken);
+    const controlIdSecret = encryptSecret("ControlIdPassword", controlIdPassword);
+    this.data.settings = { ...rest, ...activeSoftSecret, ...controlIdSecret };
     this.persist();
   }
 
@@ -131,6 +141,24 @@ export class JsonStore {
     delete this.data.pendingControlIdAccesses[accessEventId];
     this.persist();
   }
+  getControlIdPollingCursor(deviceKey: string): number | undefined {
+    return this.data.controlIdPollingCursors[deviceKey];
+  }
+  saveControlIdPollingCursor(deviceKey: string, cursor: number): void {
+    this.data.controlIdPollingCursors[deviceKey] = cursor;
+    this.persist();
+  }
+  hasProcessedControlIdAccess(sourceId: string): boolean {
+    return Boolean(this.data.processedControlIdAccesses[sourceId]);
+  }
+  markProcessedControlIdAccess(sourceId: string): void {
+    this.data.processedControlIdAccesses[sourceId] = new Date().toISOString();
+    const entries = Object.entries(this.data.processedControlIdAccesses);
+    if (entries.length > 5_000) {
+      this.data.processedControlIdAccesses = Object.fromEntries(entries.sort((a, b) => a[1].localeCompare(b[1])).slice(-4_000));
+    }
+    this.persist();
+  }
 
   private load(): PersistedData {
     const primary = this.read(this.file);
@@ -187,6 +215,12 @@ function normalizePersistedData(loaded: Partial<PersistedData>): PersistedData {
       : {},
     pendingControlIdAccesses: loaded.pendingControlIdAccesses && typeof loaded.pendingControlIdAccesses === "object"
       ? loaded.pendingControlIdAccesses
+      : {},
+    controlIdPollingCursors: loaded.controlIdPollingCursors && typeof loaded.controlIdPollingCursors === "object"
+      ? loaded.controlIdPollingCursors
+      : {},
+    processedControlIdAccesses: loaded.processedControlIdAccesses && typeof loaded.processedControlIdAccesses === "object"
+      ? loaded.processedControlIdAccesses
       : {}
   };
 }
@@ -203,6 +237,11 @@ function normalizeSettings(value: unknown): PersistedData["settings"] {
     idSecureBaseUrl: typeof source.idSecureBaseUrl === "string"
       ? source.idSecureBaseUrl
       : defaults.settings.idSecureBaseUrl,
+    controlIdMode: source.controlIdMode === "listener" ? "listener" : "polling",
+    controlIdUsername: typeof source.controlIdUsername === "string"
+      ? source.controlIdUsername
+      : defaults.settings.controlIdUsername,
+    controlIdDevices: normalizeControlIdDevices(source.controlIdDevices),
     listenerPort: typeof source.listenerPort === "number" ? source.listenerPort : defaults.settings.listenerPort,
     autoStart: typeof source.autoStart === "boolean" ? source.autoStart : defaults.settings.autoStart,
     direction: source.direction === "S" ? "S" : "E",
@@ -212,8 +251,41 @@ function normalizeSettings(value: unknown): PersistedData["settings"] {
       ? source.developerMode
       : defaults.settings.developerMode,
     ...(typeof source.encryptedToken === "string" ? { encryptedToken: source.encryptedToken } : {}),
-    ...(typeof source.plainToken === "string" ? { plainToken: source.plainToken } : {})
+    ...(typeof source.plainToken === "string" ? { plainToken: source.plainToken } : {}),
+    ...(typeof source.encryptedControlIdPassword === "string" ? { encryptedControlIdPassword: source.encryptedControlIdPassword } : {}),
+    ...(typeof source.plainControlIdPassword === "string" ? { plainControlIdPassword: source.plainControlIdPassword } : {})
   };
+}
+
+function normalizeControlIdDevices(value: unknown): ControlIdDeviceConfig[] {
+  if (!Array.isArray(value)) return structuredClone(defaults.settings.controlIdDevices);
+  return value.flatMap((entry, index) => {
+    if (!entry || typeof entry !== "object") return [];
+    const source = entry as Partial<ControlIdDeviceConfig>;
+    if (typeof source.host !== "string" || !source.host.trim()) return [];
+    return [{
+      id: typeof source.id === "string" && source.id ? source.id : `device-${index + 1}`,
+      name: typeof source.name === "string" && source.name ? source.name : `Catraca ${index + 1}`,
+      host: source.host.trim(),
+      port: typeof source.port === "number" && source.port > 0 && source.port <= 65535 ? source.port : 80,
+      enabled: source.enabled !== false
+    }];
+  });
+}
+
+function decryptSecret(encrypted?: string, plain?: string): string {
+  if (encrypted && safeStorage.isEncryptionAvailable()) {
+    try { return safeStorage.decryptString(Buffer.from(encrypted, "base64")); } catch { return ""; }
+  }
+  return plain ?? "";
+}
+
+function encryptSecret(name: "Token" | "ControlIdPassword", value: string): Record<string, string> {
+  const encryptedKey = `encrypted${name}`;
+  const plainKey = `plain${name}`;
+  return safeStorage.isEncryptionAvailable()
+    ? { [encryptedKey]: safeStorage.encryptString(value).toString("base64") }
+    : { [plainKey]: value };
 }
 
 function sanitizeLogPayload(payload: unknown): unknown {

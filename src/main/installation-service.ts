@@ -23,6 +23,7 @@ interface InstallationDependencies {
   observedControlIdTurns: () => Array<"left" | "right">;
   networkAddresses: () => string[];
   ensureListener: () => Promise<{ running: boolean; port: number; error?: string }>;
+  ensureControlIdTransport: () => Promise<void>;
   log: IntegrationLogger;
 }
 
@@ -33,14 +34,15 @@ export class InstallationService {
     const settings = this.dependencies.store.getSettings();
     this.dependencies.log("system", "Preparação automática iniciada", {
       platform: process.platform,
-      listenerPort: settings.listenerPort
+      controlIdMode: settings.controlIdMode,
+      listenerPort: settings.controlIdMode === "listener" ? settings.listenerPort : undefined
     });
 
     enableAutoStart();
     if (!settings.autoStart) this.dependencies.store.saveSettings({ ...settings, autoStart: true });
-    await this.dependencies.ensureListener();
+    await this.dependencies.ensureControlIdTransport();
 
-    if (process.platform === "win32") {
+    if (process.platform === "win32" && settings.controlIdMode === "listener") {
       try {
         const remoteAddresses = firewallRemoteAddresses(settings.idSecureBaseUrl);
         await installWindowsFirewallRule(settings.listenerPort, remoteAddresses);
@@ -63,14 +65,29 @@ export class InstallationService {
   async validate(): Promise<InstallationReport> {
     const checks: InstallationCheck[] = [];
     const settings = this.dependencies.store.getSettings();
-    const listener = await this.dependencies.ensureListener();
+    await this.dependencies.ensureControlIdTransport();
+    const polling = settings.controlIdMode === "polling";
+    const listener = polling
+      ? { running: false, port: settings.listenerPort }
+      : await this.dependencies.ensureListener();
     const addresses = this.dependencies.networkAddresses();
     const students = this.dependencies.store.getStudents();
     const studentSync = this.dependencies.store.getStudentSync();
     const devices = this.dependencies.controlIdDevices();
     const observedTurns = this.dependencies.observedControlIdTurns();
 
-    checks.push({
+    const configuredDevices = settings.controlIdDevices.filter((device) => device.enabled);
+    const pollingConfigured = Boolean(settings.controlIdUsername && settings.controlIdPassword && configuredDevices.length);
+    checks.push(polling ? {
+      id: "listener",
+      title: "Consulta ativa Control iD",
+      status: pollingConfigured ? "pass" : "fail",
+      blocking: true,
+      detail: pollingConfigured
+        ? `${configuredDevices.length} ${configuredDevices.length === 1 ? "catraca configurada" : "catracas configuradas"} para consulta direta de saída.`
+        : "Informe ao menos uma catraca, o usuário e a senha dos dispositivos.",
+      resolution: pollingConfigured ? undefined : "Abra Configurações → Control iD, preencha as credenciais e habilite os dispositivos."
+    } : {
       id: "listener",
       title: "Receptor Control iD",
       status: listener.running ? "pass" : "fail",
@@ -87,12 +104,36 @@ export class InstallationService {
       status: addresses.length ? "pass" : "fail",
       blocking: true,
       detail: addresses.length
-        ? `Endereço disponível para as catracas: ${addresses.map((address) => `${address}:${listener.port}`).join(", ")}.`
+        ? polling
+          ? `Rede local disponível em ${addresses.join(", ")} para consultar as catracas.`
+          : `Endereço disponível para as catracas: ${addresses.map((address) => `${address}:${listener.port}`).join(", ")}.`
         : "Nenhum endereço IPv4 de rede local foi detectado.",
       resolution: addresses.length ? undefined : "Conecte o computador por Ethernet à rede das catracas e tente novamente."
     });
 
-    if (process.platform === "win32") {
+    if (polling) {
+      checks.push({
+        id: "firewall",
+        title: "Firewall do Windows",
+        status: "pass",
+        blocking: false,
+        detail: "Nenhuma regra de entrada é necessária: o Ponte ID inicia as conexões com as catracas."
+      });
+      checks.push({
+        id: "network-profile",
+        title: "Perfil da rede Windows",
+        status: "pass",
+        blocking: false,
+        detail: "O modo de consulta ativa funciona em redes Pública, Privada ou Domínio."
+      });
+      checks.push({
+        id: "stable-ip",
+        title: "IP deste computador",
+        status: "pass",
+        blocking: false,
+        detail: "O computador pode usar DHCP porque as catracas não precisam iniciar conexão com ele."
+      });
+    } else if (process.platform === "win32") {
       checks.push(await validateFirewall(listener.port));
       checks.push(await validateWindowsNetworkProfile());
       checks.push(await validateDhcp());
@@ -144,21 +185,39 @@ export class InstallationService {
 
     checks.push(await validateIdSecure(settings.idSecureBaseUrl));
 
-    const recentDevices = devices.filter((device) =>
+    const relevantDevices = polling
+      ? devices.filter((device) => device.key.startsWith("poll:"))
+      : devices.filter((device) => !device.key.startsWith("poll:"));
+    const recentDevices = relevantDevices.filter((device) =>
       Date.now() - new Date(device.lastSeenAt).getTime() <= CONTROL_ID_ONLINE_WINDOW_MS
     );
-    const latestDevice = [...devices].sort((left, right) => right.lastSeenAt.localeCompare(left.lastSeenAt))[0];
+    const latestDevice = [...relevantDevices].sort((left, right) => right.lastSeenAt.localeCompare(left.lastSeenAt))[0];
+    const contactedDeviceIds = new Set(recentDevices.map((device) => device.deviceId));
+    const missingDevices = polling
+      ? configuredDevices.filter((device) => !contactedDeviceIds.has(device.id))
+      : [];
+    const devicesReady = polling
+      ? pollingConfigured && configuredDevices.length > 0 && missingDevices.length === 0
+      : recentDevices.length > 0;
     checks.push({
       id: "device-event",
       title: "Comunicação da catraca",
-      status: recentDevices.length ? "pass" : "fail",
+      status: devicesReady ? "pass" : "fail",
       blocking: true,
-      detail: recentDevices.length
-        ? `${recentDevices.length} ${recentDevices.length === 1 ? "catraca conectada" : "catracas conectadas"}; último contato em ${new Date(latestDevice!.lastSeenAt).toLocaleString("pt-BR")}.`
+      detail: devicesReady
+        ? `${recentDevices.length} ${recentDevices.length === 1 ? "catraca consultada" : "catracas consultadas"}; último contato em ${new Date(latestDevice!.lastSeenAt).toLocaleString("pt-BR")}.`
+        : polling && !pollingConfigured
+          ? "A consulta ativa ainda não possui credenciais e dispositivos habilitados."
+        : polling && missingDevices.length
+          ? `Sem resposta recente de: ${missingDevices.map((device) => `${device.name} (${device.host}:${device.port})`).join(", ")}.`
         : latestDevice
           ? `A última comunicação ocorreu em ${new Date(latestDevice.lastSeenAt).toLocaleString("pt-BR")} e já está inativa.`
           : `O receptor local está pronto, mas nenhuma catraca enviou notificações. O painel iDSecure em ${settings.idSecureBaseUrl} não encaminha esses eventos automaticamente.`,
-      resolution: recentDevices.length ? undefined : `No iDSecure, abra Acesso → Dispositivos, obtenha o IP de uma catraca e configure o Monitor dela para http://IP-DESTE-PC:${listener.port}/api/notifications. Depois faça uma passagem de teste.`
+      resolution: devicesReady
+        ? undefined
+        : polling
+          ? "Confirme os IPs, porta 80 e credenciais em Configurações. O Console mostra o erro exato de cada dispositivo."
+          : `No iDSecure, abra Acesso → Dispositivos, obtenha o IP de uma catraca e configure o Monitor dela para http://IP-DESTE-PC:${listener.port}/api/notifications. Depois faça uma passagem de teste.`
     });
 
     const mappingCount = this.dependencies.store.getControlIdMappingCount();
@@ -177,7 +236,7 @@ export class InstallationService {
 
     const directionsDiffer = settings.turnLeftDirection !== settings.turnRightDirection;
     const observedBothTurns = observedTurns.includes("left") && observedTurns.includes("right");
-    const directionsValidated = recentDevices.length > 0 && observedBothTurns && directionsDiffer;
+    const directionsValidated = devicesReady && observedBothTurns && directionsDiffer;
     checks.push({
       id: "turn-directions",
       title: "Calibração dos sentidos",
@@ -185,14 +244,14 @@ export class InstallationService {
       blocking: false,
       detail: directionsValidated
         ? `TURN LEFT e TURN RIGHT foram recebidos; configuração local: esquerda = ${directionName(settings.turnLeftDirection)}, direita = ${directionName(settings.turnRightDirection)}.`
-        : recentDevices.length === 0
+        : !devicesReady
           ? "Não validado: nenhuma catraca comunicou com o Ponte ID nos últimos 2 minutos."
           : !observedBothTurns
             ? `Contato recebido, mas o teste físico ainda não observou os dois giros. Eventos observados: ${observedTurns.length ? observedTurns.map(turnName).join(", ") : "nenhum TURN LEFT/RIGHT"}.`
             : "Os dois giros foram observados, mas estão configurados com o mesmo movimento.",
       resolution: directionsValidated
         ? undefined
-        : recentDevices.length === 0
+        : !devicesReady
           ? "Conecte uma catraca e faça uma entrada e uma saída físicas antes de validar os sentidos."
           : !observedBothTurns
             ? "Faça uma passagem em cada sentido para o Ponte ID receber TURN LEFT e TURN RIGHT."

@@ -4,6 +4,7 @@ import { networkInterfaces } from "node:os";
 import { ActiveSoftClient } from "./active-soft";
 import { AccessService } from "./access-service";
 import { ControlIdServer } from "./control-id-server";
+import { ControlIdPollingService } from "./control-id-polling";
 import { JsonStore } from "./store";
 import { AppState, ControlIdDeviceContact, InstallationReport, SaveSettingsInput, Settings } from "../shared/types";
 import { createIntegrationLogger, IntegrationLogger } from "./integration-logger";
@@ -18,6 +19,7 @@ let store: JsonStore;
 let activeSoft: ActiveSoftClient;
 let accessService: AccessService;
 let controlIdServer: ControlIdServer;
+let controlIdPolling: ControlIdPollingService;
 let integrationLog: IntegrationLogger;
 let installationService: InstallationService;
 let photoService: PhotoService;
@@ -55,6 +57,13 @@ async function bootstrap(): Promise<void> {
     integrationLog,
     registerControlIdContact
   );
+  controlIdPolling = new ControlIdPollingService(
+    accessService,
+    store,
+    () => store.getSettings(),
+    integrationLog,
+    registerControlIdContact
+  );
   installationService = new InstallationService({
     store,
     activeSoft,
@@ -62,19 +71,24 @@ async function bootstrap(): Promise<void> {
     observedControlIdTurns: () => [...observedControlIdTurns],
     networkAddresses: localIpv4Addresses,
     ensureListener: ensureListenerHealthy,
+    ensureControlIdTransport: configureControlIdTransport,
     log: integrationLog
   });
   registerIpc();
   createTray();
   createWindow();
-  await ensureListenerHealthy();
+  await configureControlIdTransport();
   integrationLog("system", "Ponte ID iniciado", {
     version: app.getVersion(),
     platform: process.platform,
-    listenerPort: startupSettings.listenerPort
+    controlIdMode: startupSettings.controlIdMode,
+    listenerPort: startupSettings.controlIdMode === "listener" ? startupSettings.listenerPort : undefined,
+    devices: startupSettings.controlIdDevices.filter((device) => device.enabled).map((device) => `${device.host}:${device.port}`)
   });
   setInterval(() => void accessService.retryQueue(), 30_000);
-  const listenerWatchdog = setInterval(() => void ensureListenerHealthy(), 30_000);
+  const listenerWatchdog = setInterval(() => {
+    if (store.getSettings().controlIdMode === "listener") void ensureListenerHealthy();
+  }, 30_000);
   listenerWatchdog.unref();
   if (store.getSettings().configured) void synchronize();
 }
@@ -110,13 +124,17 @@ function showWindow(): void { window?.show(); window?.focus(); }
 
 function state(): AppState {
   const settings = store.getSettings();
-  const { activeSoftToken, ...publicSettings } = settings;
+  const { activeSoftToken, controlIdPassword, ...publicSettings } = settings;
   const students = store.getStudents();
   const studentSync = store.getStudentSync();
   const visibleStudents = studentSync ? students : [];
   return {
     appVersion: app.getVersion(),
-    settings: { ...publicSettings, tokenConfigured: Boolean(activeSoftToken) },
+    settings: {
+      ...publicSettings,
+      tokenConfigured: Boolean(activeSoftToken),
+      controlIdPasswordConfigured: Boolean(controlIdPassword)
+    },
     listener: listenerState,
     controlId: { devices: [...controlIdDevices.values()] },
     activeSoft: activeSoftState,
@@ -186,6 +204,20 @@ async function ensureListenerHealthy(): Promise<AppState["listener"]> {
   return listenerState;
 }
 
+async function configureControlIdTransport(): Promise<void> {
+  const settings = store.getSettings();
+  if (settings.controlIdMode === "polling") {
+    await controlIdServer.stop();
+    listenerState = { running: false, port: settings.listenerPort };
+    await controlIdPolling.restart();
+    broadcastState();
+    return;
+  }
+
+  controlIdPolling.stop();
+  await ensureListenerHealthy();
+}
+
 async function synchronize(): Promise<void> {
   try {
     const students = await activeSoft.listStudents();
@@ -201,15 +233,23 @@ function registerIpc(): void {
   ipcMain.handle("state:get", () => state());
   ipcMain.handle("settings:save", async (_event, input: SaveSettingsInput) => {
     const current = store.getSettings();
+    const controlIdMode = input.controlIdMode === "listener" ? "listener" : "polling";
+    const listenerPort = validPort(input.listenerPort, "Porta do receptor");
+    const controlIdDevices = validateControlIdDevices(input.controlIdDevices);
     const settings: Settings = {
       ...input,
       configured: true,
       autoStart: true,
-      activeSoftToken: input.activeSoftToken?.trim() || current.activeSoftToken
+      controlIdMode,
+      controlIdUsername: input.controlIdUsername.trim() || "admin",
+      controlIdDevices,
+      listenerPort,
+      activeSoftToken: input.activeSoftToken?.trim() || current.activeSoftToken,
+      controlIdPassword: input.controlIdPassword?.trim() || current.controlIdPassword
     };
     store.saveSettings(settings);
     enableAutoStart();
-    await ensureListenerHealthy();
+    await configureControlIdTransport();
     await synchronize();
     return state();
   });
@@ -234,7 +274,11 @@ function registerIpc(): void {
   ipcMain.handle("external:open", (_event, url: string) => { if (/^https?:\/\//.test(url)) return shell.openExternal(url); });
 }
 
-app.on("before-quit", () => { quitting = true; });
+app.on("before-quit", () => {
+  quitting = true;
+  controlIdPolling?.stop();
+  void controlIdServer?.stop();
+});
 app.on("window-all-closed", () => { /* resident process stays in the tray */ });
 
 function localIpv4Addresses(): string[] {
@@ -255,4 +299,43 @@ function registerControlIdContact(contact: ControlIdDeviceContact): void {
     if (oldest) controlIdDevices.delete(oldest.key);
   }
   broadcastState();
+}
+
+function validateControlIdDevices(value: unknown): Settings["controlIdDevices"] {
+  if (!Array.isArray(value)) throw new Error("A lista de catracas é inválida.");
+  const addresses = new Set<string>();
+  const ids = new Set<string>();
+  return value.map((entry, index) => {
+    if (!entry || typeof entry !== "object") throw new Error(`A catraca ${index + 1} é inválida.`);
+    const source = entry as Partial<Settings["controlIdDevices"][number]>;
+    const name = String(source.name ?? "").trim() || `Catraca ${index + 1}`;
+    const rawHost = String(source.host ?? "").trim();
+    let parsed: URL;
+    try {
+      parsed = new URL(`http://${rawHost}`);
+    } catch {
+      throw new Error(`${name}: informe somente um IP ou nome de rede válido.`);
+    }
+    if (!rawHost || parsed.pathname !== "/" || parsed.search || parsed.hash || parsed.username || parsed.password || parsed.port) {
+      throw new Error(`${name}: informe o IP sem http://, caminho ou porta. Use o campo Porta ao lado.`);
+    }
+    const host = parsed.hostname;
+    const port = validPort(Number(source.port), `${name}: porta`);
+    const address = `${host}:${port}`.toLowerCase();
+    if (addresses.has(address)) throw new Error(`${name}: o endereço ${host}:${port} está repetido.`);
+    addresses.add(address);
+
+    const baseId = String(source.id ?? "").trim() || `device-${index + 1}`;
+    let id = baseId;
+    while (ids.has(id)) id = `${baseId}-${index + 1}`;
+    ids.add(id);
+    return { id, name, host, port, enabled: source.enabled !== false };
+  });
+}
+
+function validPort(value: number, label: string): number {
+  if (!Number.isInteger(value) || value < 1 || value > 65_535) {
+    throw new Error(`${label}: informe um número entre 1 e 65535.`);
+  }
+  return value;
 }

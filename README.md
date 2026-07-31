@@ -1,6 +1,6 @@
 # Ponte ID
 
-Aplicativo desktop residente para integrar catracas Control iD ao ActiveSoft SIGA. Recebe identificações e confirmações de giro pela rede local, associa o `user_id` da Control iD ao aluno sincronizado, registra entrada/saída na ActiveSoft e exibe a foto do último acesso.
+Aplicativo desktop residente para integrar catracas Control iD ao ActiveSoft SIGA. Consulta as catracas pela rede local, correlaciona a identificação facial ao giro físico, associa o `user_id` da Control iD ao aluno sincronizado, registra entrada/saída na ActiveSoft e exibe a foto do último acesso.
 
 ## Executar em desenvolvimento
 
@@ -37,7 +37,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\build-windows.ps1
 O instalador será criado em:
 
 ```text
-release\Ponte ID Setup 0.1.8.exe
+release\Ponte ID Setup 0.2.0.exe
 ```
 
 Para executar cada etapa manualmente:
@@ -53,6 +53,8 @@ Também é possível disparar manualmente o workflow `Gerar instalador Windows` 
 
 O instalador atual não possui certificado comercial de assinatura de código. Até que um certificado seja configurado, o Windows SmartScreen pode solicitar confirmação adicional na primeira execução.
 
+Durante uma atualização, o instalador encerra qualquer processo antigo do Ponte ID antes de substituir os binários. Os dados em `%APPDATA%` não são apagados, portanto configurações, credenciais protegidas, histórico e cursores continuam disponíveis na nova versão.
+
 ### Gerar no macOS
 
 Em um Mac com Node.js 22 LTS, execute na raiz do projeto:
@@ -64,20 +66,35 @@ Em um Mac com Node.js 22 LTS, execute na raiz do projeto:
 O script instala as dependências, executa os testes e gera o mesmo instalador NSIS x64 em:
 
 ```text
-release/Ponte ID Setup 0.1.8.exe
+release/Ponte ID Setup 0.2.0.exe
 ```
 
 Em Macs com Apple Silicon, o script verifica e instala o Rosetta 2 automaticamente na primeira execução. Esta build não requer Docker nem Wine. O comando equivalente pelo npm é `npm run build:windows:macos`.
 
 ## Persistência e inicialização
 
-Configurações, alunos sincronizados, histórico recente, fila pendente, associações Control iD e logs são mantidos no diretório de dados do Ponte ID dentro de `%APPDATA%`. O token ActiveSoft é criptografado com a proteção de credenciais do usuário do Windows. O aplicativo mantém também uma cópia de recuperação do arquivo local e o instalador não remove esses dados durante atualização ou desinstalação.
+Configurações, alunos sincronizados, histórico recente, fila pendente, cursores de consulta, associações Control iD e logs são mantidos no diretório de dados do Ponte ID dentro de `%APPDATA%`. O token ActiveSoft e a senha das catracas são criptografados com a proteção de credenciais do usuário do Windows. O aplicativo mantém também uma cópia de recuperação do arquivo local e o instalador não remove esses dados durante atualização ou desinstalação.
 
 O início automático é obrigatório: após o login na mesma conta do Windows usada na configuração, o Ponte ID inicia oculto e permanece na bandeja. Abrir o atalho quando ele já estiver em execução apenas mostra a janela existente. A validação da instalação também detecta quando a entrada foi desabilitada em `Gerenciador de Tarefas > Aplicativos de inicialização`.
 
 Como a criptografia do token e o auto-início pertencem à conta do Windows, a escola deve manter a mesma conta operacional. Para iniciar antes de qualquer login seria necessário separar o receptor em um Serviço do Windows; a aplicação atual inicia imediatamente após o login.
 
-## Endpoints locais já aceitos
+## Comunicação Control iD
+
+O modo padrão é **Consulta ativa**, adequado inclusive a computadores com Firewall gerenciado por GPO. O Ponte ID abre conexões HTTP de saída para cada dispositivo, autentica em `/login.fcgi` e lê pela API oficial:
+
+- `access_logs`, para identificar acessos concedidos ou desistências;
+- `access_events`, para confirmar `TURN_LEFT` ou `TURN_RIGHT`;
+- `users`, somente os campos `id`, `name` e `registration` necessários ao vínculo.
+
+As catracas atuais vêm pré-configuradas na tela e podem ser editadas:
+
+- CATRACA 1: `192.168.1.189:80`;
+- CATRACA 2: `192.168.1.178:80`.
+
+Na primeira conexão, o cursor começa no último registro já existente, evitando enviar histórico antigo. Depois disso, cursores e eventos processados são persistidos para impedir duplicidade após reinício. O modo legado de recebimento por Monitor continua disponível como opção avançada e aceita os endpoints locais abaixo.
+
+## Endpoints locais do modo avançado
 
 - `POST /new_user_identified.fcgi`
 - `POST /api/notifications/dao`
@@ -100,11 +117,11 @@ O modo desenvolvedor habilita as abas Console e Instalação. O Console diferenc
 Na aba Instalação, `Preparar este computador` aplica somente mudanças locais seguras:
 
 - registra o auto-início após login;
-- reinicia o receptor na porta configurada;
-- no Windows, solicita elevação para criar uma regra de Firewall idempotente em todos os perfis, com origem restrita à rede local e à sub-rede privada do iDSecure. A validação consulta a política efetiva e informa quando uma GPO ignora regras locais.
+- no modo Consulta ativa, testa diretamente cada IP configurado sem solicitar elevação ou criar regra de Firewall;
+- no modo avançado por Monitor, reinicia o receptor e tenta criar a regra de entrada restrita à rede local.
 
-`Validar instalação` verifica receptor, IPv4, Firewall, perfil da rede, DHCP, auto-início, permissões ActiveSoft sem gravar frequência, alunos, fotos, último evento Control iD, vínculos por matrícula e sentidos de giro. Cada falha inclui uma correção específica.
+`Validar instalação` verifica rede, autenticação e contato individual com as catracas, auto-início, permissões ActiveSoft sem gravar frequência, alunos, fotos, vínculos por matrícula e sentidos de giro. No modo Consulta ativa, Firewall de entrada, perfil Privado e IP fixo deste computador são corretamente marcados como desnecessários. Cada falha inclui uma correção específica.
 
-O receptor possui uma verificação local autenticada em `/health`. A validação e um watchdog em segundo plano reiniciam automaticamente o receptor caso a porta deixe de responder. O endereço do servidor iDSecure é configurado separadamente; na instalação atual, o painel central usa `https://192.168.1.2:30443`, enquanto a porta `8787` pertence exclusivamente ao receptor do Ponte ID.
+O receptor opcional possui uma verificação local em `/health`. A validação e um watchdog em segundo plano reiniciam automaticamente o receptor quando o modo por Monitor está selecionado. O endereço do servidor iDSecure é configurado separadamente; na instalação atual, o painel central usa `https://192.168.1.2:30443`.
 
 O aplicativo não modifica automaticamente IP, roteador, `online_client` ou destino atual do Monitor. Essas mudanças podem interromper o iDSecure Enterprise e exigem inspeção da instalação existente.
