@@ -76,6 +76,22 @@ test("força HTTPS na paginação e preserva os campos de aluno", async () => {
   }
 });
 
+test("não registra no Console as listagens bem-sucedidas de alunos", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => Response.json({ results: [], next: null });
+  const logs: Array<{ category: string; title: string }> = [];
+  try {
+    const client = new ActiveSoftClient(
+      () => settings,
+      (category, title) => logs.push({ category, title })
+    );
+    await client.listStudents();
+    assert.deepEqual(logs, []);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("envia a frequência com matrícula textual e autenticação Bearer", async () => {
   const originalFetch = globalThis.fetch;
   let captured: { url: string; init?: RequestInit } | undefined;

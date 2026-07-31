@@ -46,11 +46,13 @@
     <section id="console" class="view developer-only">
       <div class="console-toolbar">
         <div class="console-legend">
-          <span class="legend device-in">Control iD → App</span>
-          <span class="legend device-out">App → Control iD</span>
-          <span class="legend api-out">App → ActiveSoft</span>
-          <span class="legend api-in">ActiveSoft → App</span>
-          <span class="legend error">Erros</span>
+          <button class="legend console-filter all active" data-category="all" aria-pressed="true" type="button">Todos</button>
+          <button class="legend console-filter device-in" data-category="device-in" aria-pressed="false" type="button">Control iD → App</button>
+          <button class="legend console-filter device-out" data-category="device-out" aria-pressed="false" type="button">App → Control iD</button>
+          <button class="legend console-filter api-out" data-category="api-out" aria-pressed="false" type="button">App → ActiveSoft</button>
+          <button class="legend console-filter api-in" data-category="api-in" aria-pressed="false" type="button">ActiveSoft → App</button>
+          <button class="legend console-filter system" data-category="system" aria-pressed="false" type="button">Sistema</button>
+          <button class="legend console-filter error" data-category="error" aria-pressed="false" type="button">Erros</button>
         </div>
         <div class="console-actions">
           <label class="compact-check"><input id="console-autoscroll" type="checkbox" checked> Rolar automaticamente</label>

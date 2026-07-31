@@ -75,7 +75,8 @@ export class ActiveSoftClient {
     const method = init.method ?? "GET";
     const safeUrl = url.replace(settings.activeSoftBaseUrl, "");
     const requestBody = parseJsonOrText(typeof init.body === "string" ? init.body : undefined);
-    this.log("api-out", `${method} ActiveSoft ${safeUrl}`, requestBody);
+    const quietStudentListing = method === "GET" && isStudentListingUrl(url);
+    if (!quietStudentListing) this.log("api-out", `${method} ActiveSoft ${safeUrl}`, requestBody);
     try {
       const response = await fetch(url, {
         ...init,
@@ -90,10 +91,12 @@ export class ActiveSoftClient {
       const responseText = response.status === 204 ? "" : await response.text();
       const responseBody = parseJsonOrText(responseText);
       const bearerError = parseBearerChallenge(response.headers.get("www-authenticate"));
-      this.log(response.ok ? "api-in" : "error", `${response.status} ActiveSoft ${method} ${safeUrl}`, {
-        body: responseBody,
-        authentication: bearerError
-      });
+      if (!response.ok || !quietStudentListing) {
+        this.log(response.ok ? "api-in" : "error", `${response.status} ActiveSoft ${method} ${safeUrl}`, {
+          body: responseBody,
+          authentication: bearerError
+        });
+      }
       if (!response.ok) {
         const detail = bearerError?.description || responseText.slice(0, 300) || response.statusText;
         throw new Error(`ActiveSoft respondeu ${response.status}: ${translateAuthenticationError(detail)}`);
@@ -108,6 +111,14 @@ export class ActiveSoftClient {
       }
       throw error;
     }
+  }
+}
+
+function isStudentListingUrl(value: string): boolean {
+  try {
+    return new URL(value).pathname === "/api/v0/lista_alunos/";
+  } catch {
+    return false;
   }
 }
 

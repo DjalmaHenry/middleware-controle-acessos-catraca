@@ -1,5 +1,6 @@
 const $ = (selector) => document.querySelector(selector);
 let appState;
+let consoleFilter = "all";
 const photoCache = new Map();
 const photoRequests = new Map();
 
@@ -108,14 +109,27 @@ function renderConsole(state) {
   const output = $("#console-output");
   if (!output) return;
   const shouldScroll = $("#console-autoscroll").checked;
-  output.innerHTML = state.integrationLogs.length
-    ? state.integrationLogs.map((entry) => {
+  const visibleLogs = consoleFilter === "all"
+    ? state.integrationLogs
+    : state.integrationLogs.filter((entry) => entry.category === consoleFilter);
+  output.innerHTML = visibleLogs.length
+    ? visibleLogs.map((entry) => {
       const time = new Date(entry.timestamp).toLocaleTimeString("pt-BR", { hour12: false });
       const payload = entry.payload === undefined ? "" : `<pre>${escapeHtml(JSON.stringify(entry.payload, null, 2))}</pre>`;
       return `<div class="console-entry ${entry.category}"><time>${time}</time><span class="channel">${consoleLabels[entry.category]}</span><div><strong>${escapeHtml(entry.title)}</strong>${payload}</div></div>`;
     }).join("")
-    : `<div class="console-empty">Aguardando eventos de integração.</div>`;
+    : `<div class="console-empty">${state.integrationLogs.length ? "Nenhum evento deste tipo." : "Aguardando eventos de integração."}</div>`;
   if (shouldScroll) output.scrollTop = output.scrollHeight;
+}
+
+function selectConsoleFilter(category) {
+  consoleFilter = category;
+  document.querySelectorAll(".console-filter").forEach((button) => {
+    const active = button.dataset.category === category;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-pressed", String(active));
+  });
+  if (appState) renderConsole(appState);
 }
 
 function renderInstallationGuide(state) {
@@ -323,6 +337,9 @@ $("#settings-form").addEventListener("submit", async (event) => {
 
 $("#sync-button").addEventListener("click", async () => { $("#sync-button").disabled = true; try { await window.ponte.synchronize(); } finally { $("#sync-button").disabled = false; } });
 $("#clear-console").addEventListener("click", () => window.ponte.clearLogs());
+document.querySelectorAll(".console-filter").forEach((button) => {
+  button.addEventListener("click", () => selectConsoleFilter(button.dataset.category));
+});
 $("#control-id-mode").addEventListener("change", updateControlIdModeVisibility);
 $("#add-control-id-device").addEventListener("click", () => {
   const devices = readControlIdDevices();
