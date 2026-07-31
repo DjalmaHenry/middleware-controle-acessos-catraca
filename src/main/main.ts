@@ -72,7 +72,10 @@ async function bootstrap(): Promise<void> {
     platform: process.platform,
     listenerPort: startupSettings.listenerPort
   });
-  if (store.getSettings().demoMode && store.getStudents().length === 0) accessService.seedDemoStudents();
+  if (
+    store.getSettings().demoMode
+    && (store.getStudents().length === 0 || !store.getStudentSync())
+  ) accessService.seedDemoStudents();
   setInterval(() => void accessService.retryQueue(), 30_000);
   if (store.getSettings().configured && !store.getSettings().demoMode) void synchronize();
 }
@@ -109,12 +112,15 @@ function showWindow(): void { window?.show(); window?.focus(); }
 function state(): AppState {
   const settings = store.getSettings();
   const { activeSoftToken, ...publicSettings } = settings;
+  const students = store.getStudents();
+  const studentSync = store.getStudentSync();
+  const visibleStudents = settings.demoMode || studentSync?.source === "activesoft" ? students : [];
   return {
     settings: { ...publicSettings, tokenConfigured: Boolean(activeSoftToken) },
     listener: listenerState,
     controlId: { devices: [...controlIdDevices.values()] },
     activeSoft: activeSoftState,
-    students: store.getStudents(),
+    students: visibleStudents,
     recentAccesses: store.getRecentAccesses(),
     pendingCount: store.getQueue().length,
     integrationLogs: store.getIntegrationLogs(),
@@ -151,14 +157,14 @@ async function restartListener(): Promise<void> {
 
 async function synchronize(): Promise<void> {
   if (store.getSettings().demoMode) {
-    if (store.getStudents().length === 0) accessService.seedDemoStudents();
+    if (store.getStudents().length === 0 || !store.getStudentSync()) accessService.seedDemoStudents();
     activeSoftState = { status: "unknown", message: "Modo demonstração ativo" };
     broadcastState();
     return;
   }
   try {
     const students = await activeSoft.listStudents();
-    store.saveStudents(students);
+    store.saveStudents(students, "activesoft");
     activeSoftState = { status: "online", message: `${students.length} alunos sincronizados` };
   } catch (error) {
     activeSoftState = { status: "offline", message: error instanceof Error ? error.message : String(error) };
@@ -178,7 +184,10 @@ function registerIpc(): void {
     };
     store.saveSettings(settings);
     enableAutoStart();
-    if (settings.demoMode && store.getStudents().length === 0) accessService.seedDemoStudents();
+    if (
+      settings.demoMode
+      && (store.getStudents().length === 0 || !store.getStudentSync())
+    ) accessService.seedDemoStudents();
     await restartListener();
     if (!settings.demoMode) await synchronize();
     return state();

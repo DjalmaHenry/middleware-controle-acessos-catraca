@@ -21,6 +21,11 @@ export interface Student {
   turma?: string;
 }
 
+export interface StudentSyncState {
+  source: "demo" | "activesoft";
+  syncedAt: string;
+}
+
 export interface AccessRecord {
   id: string;
   studentId: number;

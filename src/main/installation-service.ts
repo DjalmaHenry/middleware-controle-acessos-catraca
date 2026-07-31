@@ -6,6 +6,7 @@ import { JsonStore } from "./store";
 import { ControlIdDeviceContact, InstallationCheck, InstallationReport } from "../shared/types";
 import { enableAutoStart, isAutoStartEnabled } from "./startup";
 import { buildInstallationLog } from "./installation-log";
+import { buildStudentCacheCheck } from "./student-cache-check";
 
 const execFileAsync = promisify(execFile);
 const FIREWALL_RULE_NAME = "Ponte ID - Control iD";
@@ -60,6 +61,7 @@ export class InstallationService {
     const listener = this.dependencies.listenerState();
     const addresses = this.dependencies.networkAddresses();
     const students = this.dependencies.store.getStudents();
+    const studentSync = this.dependencies.store.getStudentSync();
     const devices = this.dependencies.controlIdDevices();
     const observedTurns = this.dependencies.observedControlIdTurns();
 
@@ -144,16 +146,7 @@ export class InstallationService {
       }
     }
 
-    checks.push({
-      id: "students",
-      title: "Cadastro local de alunos",
-      status: students.length > 0 ? "pass" : "fail",
-      blocking: true,
-      detail: students.length > 0
-        ? `${students.length} alunos sincronizados; ${students.filter((student) => student.urlFoto).length} possuem foto.`
-        : "Nenhum aluno está disponível no cache local.",
-      resolution: students.length > 0 ? undefined : "Corrija a conexão ActiveSoft e clique em Sincronizar."
-    });
+    checks.push(buildStudentCacheCheck(students, studentSync));
 
     const recentDevices = devices.filter((device) =>
       Date.now() - new Date(device.lastSeenAt).getTime() <= CONTROL_ID_ONLINE_WINDOW_MS

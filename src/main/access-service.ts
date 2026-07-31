@@ -14,6 +14,9 @@ export class AccessService {
   ) {}
 
   async register(studentId: number, direction?: Direction, occurredAt = new Date().toISOString()): Promise<AccessRecord> {
+    if (!this.store.getSettings().demoMode && this.store.getStudentSync()?.source !== "activesoft") {
+      throw new Error("Não existe uma sincronização real de alunos da ActiveSoft disponível. Configure o token e sincronize antes de processar acessos.");
+    }
     const student = this.store.getStudents().find((item) => item.id === studentId);
     if (!student) throw new Error(`Aluno ${studentId} não encontrado na sincronização local.`);
     const record: AccessRecord = {
@@ -63,7 +66,7 @@ export class AccessService {
       { id: 102, matricula: "202600102", nome: "Lucas Almeida", turma: "8º Ano B", urlFoto: "https://i.pravatar.cc/600?img=12" },
       { id: 103, matricula: "202600103", nome: "Beatriz Santos", turma: "6º Ano A", urlFoto: "https://i.pravatar.cc/600?img=32" }
     ];
-    this.store.saveStudents(students);
+    this.store.saveStudents(students, "demo");
     this.onChange();
     return students;
   }

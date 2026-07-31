@@ -2,11 +2,12 @@ import { app, safeStorage } from "electron";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
-import { AccessRecord, IntegrationLog, IntegrationLogCategory, Settings, Student } from "../shared/types";
+import { AccessRecord, IntegrationLog, IntegrationLogCategory, Settings, Student, StudentSyncState } from "../shared/types";
 
 interface PersistedData {
   settings: Omit<Settings, "activeSoftToken"> & { encryptedToken?: string; plainToken?: string };
   students: Student[];
+  studentSync?: StudentSyncState;
   recentAccesses: AccessRecord[];
   queue: AccessRecord[];
   integrationLogs: IntegrationLog[];
@@ -27,6 +28,7 @@ const defaults: PersistedData = {
     developerMode: false
   },
   students: [],
+  studentSync: undefined,
   recentAccesses: [],
   queue: [],
   integrationLogs: [],
@@ -72,7 +74,14 @@ export class JsonStore {
   }
 
   getStudents(): Student[] { return [...this.data.students]; }
-  saveStudents(students: Student[]): void { this.data.students = students; this.persist(); }
+  getStudentSync(): StudentSyncState | undefined {
+    return this.data.studentSync ? { ...this.data.studentSync } : undefined;
+  }
+  saveStudents(students: Student[], source: StudentSyncState["source"]): void {
+    this.data.students = students;
+    this.data.studentSync = { source, syncedAt: new Date().toISOString() };
+    this.persist();
+  }
   getRecentAccesses(): AccessRecord[] { return [...this.data.recentAccesses]; }
   addAccess(record: AccessRecord): void {
     this.data.recentAccesses = [record, ...this.data.recentAccesses.filter((item) => item.id !== record.id)].slice(0, 50);
@@ -166,6 +175,7 @@ function normalizePersistedData(loaded: Partial<PersistedData>): PersistedData {
   return {
     settings: { ...defaults.settings, ...(loaded.settings ?? {}) },
     students: Array.isArray(loaded.students) ? loaded.students : [],
+    studentSync: isStudentSyncState(loaded.studentSync) ? loaded.studentSync : undefined,
     recentAccesses: Array.isArray(loaded.recentAccesses) ? loaded.recentAccesses : [],
     queue: Array.isArray(loaded.queue) ? loaded.queue : [],
     integrationLogs: Array.isArray(loaded.integrationLogs) ? loaded.integrationLogs : [],
@@ -176,6 +186,14 @@ function normalizePersistedData(loaded: Partial<PersistedData>): PersistedData {
       ? loaded.pendingControlIdAccesses
       : {}
   };
+}
+
+function isStudentSyncState(value: unknown): value is StudentSyncState {
+  if (!value || typeof value !== "object") return false;
+  const candidate = value as Partial<StudentSyncState>;
+  return (candidate.source === "demo" || candidate.source === "activesoft")
+    && typeof candidate.syncedAt === "string"
+    && !Number.isNaN(Date.parse(candidate.syncedAt));
 }
 
 function sanitizeLogPayload(payload: unknown): unknown {
