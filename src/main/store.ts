@@ -1,5 +1,5 @@
 import { app, safeStorage } from "electron";
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { AccessRecord, IntegrationLog, IntegrationLogCategory, Settings, Student } from "../shared/types";
@@ -36,12 +36,14 @@ const defaults: PersistedData = {
 
 export class JsonStore {
   private readonly file: string;
+  private readonly backupFile: string;
   private data: PersistedData;
 
   constructor() {
     const directory = app.getPath("userData");
     mkdirSync(directory, { recursive: true });
     this.file = path.join(directory, "ponte-id.json");
+    this.backupFile = path.join(directory, "ponte-id.backup.json");
     this.data = this.load();
   }
 
@@ -121,27 +123,59 @@ export class JsonStore {
   }
 
   private load(): PersistedData {
-    try {
-      const loaded = JSON.parse(readFileSync(this.file, "utf8")) as Partial<PersistedData>;
-      return {
-        settings: { ...defaults.settings, ...loaded.settings },
-        students: loaded.students ?? [],
-        recentAccesses: loaded.recentAccesses ?? [],
-        queue: loaded.queue ?? [],
-        integrationLogs: loaded.integrationLogs ?? [],
-        controlIdMappings: loaded.controlIdMappings ?? {},
-        pendingControlIdAccesses: loaded.pendingControlIdAccesses ?? {}
-      };
-    } catch {
-      return structuredClone(defaults);
+    const primary = this.read(this.file);
+    if (primary) return normalizePersistedData(primary);
+
+    const backup = this.read(this.backupFile);
+    if (backup) {
+      const recovered = normalizePersistedData(backup);
+      try {
+        writeFileSync(this.file, JSON.stringify(recovered, null, 2), { encoding: "utf8", mode: 0o600 });
+      } catch {
+        // The in-memory recovery remains usable even if the disk cannot be repaired yet.
+      }
+      return recovered;
     }
+
+    return structuredClone(defaults);
   }
 
   private persist(): void {
     const temporary = `${this.file}.tmp`;
     writeFileSync(temporary, JSON.stringify(this.data, null, 2), { encoding: "utf8", mode: 0o600 });
+    if (existsSync(this.file)) {
+      try {
+        copyFileSync(this.file, this.backupFile);
+      } catch {
+        // A backup failure must not prevent the primary atomic write.
+      }
+    }
     renameSync(temporary, this.file);
   }
+
+  private read(file: string): Partial<PersistedData> | undefined {
+    try {
+      return JSON.parse(readFileSync(file, "utf8")) as Partial<PersistedData>;
+    } catch {
+      return undefined;
+    }
+  }
+}
+
+function normalizePersistedData(loaded: Partial<PersistedData>): PersistedData {
+  return {
+    settings: { ...defaults.settings, ...(loaded.settings ?? {}) },
+    students: Array.isArray(loaded.students) ? loaded.students : [],
+    recentAccesses: Array.isArray(loaded.recentAccesses) ? loaded.recentAccesses : [],
+    queue: Array.isArray(loaded.queue) ? loaded.queue : [],
+    integrationLogs: Array.isArray(loaded.integrationLogs) ? loaded.integrationLogs : [],
+    controlIdMappings: loaded.controlIdMappings && typeof loaded.controlIdMappings === "object"
+      ? loaded.controlIdMappings
+      : {},
+    pendingControlIdAccesses: loaded.pendingControlIdAccesses && typeof loaded.pendingControlIdAccesses === "object"
+      ? loaded.pendingControlIdAccesses
+      : {}
+  };
 }
 
 function sanitizeLogPayload(payload: unknown): unknown {

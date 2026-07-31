@@ -271,7 +271,7 @@ $("#settings-form").addEventListener("submit", async (event) => {
       activeSoftBaseUrl: $("#api-url").value.trim(), activeSoftToken: $("#api-token").value.trim() || undefined,
       listenerPort: Number($("#listener-port").value), direction: $("#direction").value,
       turnLeftDirection: $("#turn-left-direction").value, turnRightDirection: $("#turn-right-direction").value,
-      autoStart: $("#auto-start").checked, demoMode: $("#demo-mode").checked,
+      autoStart: true, demoMode: $("#demo-mode").checked,
       developerMode: $("#developer-mode").checked
     });
     $("#api-token").value = ""; render(state); message.textContent = "Configurações salvas.";

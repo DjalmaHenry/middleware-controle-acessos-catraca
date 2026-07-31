@@ -9,6 +9,7 @@ import { AppState, ControlIdDeviceContact, InstallationReport, SaveSettingsInput
 import { createIntegrationLogger, IntegrationLogger } from "./integration-logger";
 import { InstallationService } from "./installation-service";
 import { PhotoService } from "./photo-service";
+import { enableAutoStart, wasStartedAutomatically } from "./startup";
 
 let window: BrowserWindow | null = null;
 let tray: Tray | null = null;
@@ -34,8 +35,12 @@ else {
 
 async function bootstrap(): Promise<void> {
   store = new JsonStore();
-  const startupSettings = store.getSettings();
-  app.setLoginItemSettings({ openAtLogin: startupSettings.autoStart, openAsHidden: true });
+  let startupSettings = store.getSettings();
+  if (!startupSettings.autoStart) {
+    startupSettings = { ...startupSettings, autoStart: true };
+    store.saveSettings(startupSettings);
+  }
+  enableAutoStart();
   integrationLog = createIntegrationLogger(store, broadcastState);
   photoService = new PhotoService(integrationLog);
   activeSoft = new ActiveSoftClient(() => store.getSettings(), integrationLog);
@@ -79,7 +84,9 @@ function createWindow(): void {
   });
   window.setMenuBarVisibility(false);
   void window.loadFile(path.join(__dirname, "../renderer/index.html"));
-  window.once("ready-to-show", () => window?.show());
+  window.once("ready-to-show", () => {
+    if (!wasStartedAutomatically()) window?.show();
+  });
   window.on("close", (event) => { if (!quitting) { event.preventDefault(); window?.hide(); } });
 }
 
@@ -160,9 +167,14 @@ function registerIpc(): void {
   ipcMain.handle("state:get", () => state());
   ipcMain.handle("settings:save", async (_event, input: SaveSettingsInput) => {
     const current = store.getSettings();
-    const settings: Settings = { ...input, configured: true, activeSoftToken: input.activeSoftToken?.trim() || current.activeSoftToken };
+    const settings: Settings = {
+      ...input,
+      configured: true,
+      autoStart: true,
+      activeSoftToken: input.activeSoftToken?.trim() || current.activeSoftToken
+    };
     store.saveSettings(settings);
-    app.setLoginItemSettings({ openAtLogin: settings.autoStart, openAsHidden: true });
+    enableAutoStart();
     if (settings.demoMode && store.getStudents().length === 0) accessService.seedDemoStudents();
     await restartListener();
     if (!settings.demoMode) await synchronize();

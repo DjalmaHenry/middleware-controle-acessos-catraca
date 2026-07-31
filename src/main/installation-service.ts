@@ -1,10 +1,10 @@
-import { app } from "electron";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { ActiveSoftClient } from "./active-soft";
 import { IntegrationLogger } from "./integration-logger";
 import { JsonStore } from "./store";
 import { ControlIdDeviceContact, InstallationCheck, InstallationReport } from "../shared/types";
+import { enableAutoStart, isAutoStartEnabled } from "./startup";
 
 const execFileAsync = promisify(execFile);
 const FIREWALL_RULE_NAME = "Ponte ID - Control iD";
@@ -30,7 +30,7 @@ export class InstallationService {
       listenerPort: settings.listenerPort
     });
 
-    app.setLoginItemSettings({ openAtLogin: true, openAsHidden: true });
+    enableAutoStart();
     if (!settings.autoStart) this.dependencies.store.saveSettings({ ...settings, autoStart: true });
     await this.dependencies.restartListener();
 
@@ -97,16 +97,16 @@ export class InstallationService {
       });
     }
 
-    const loginSettings = app.getLoginItemSettings();
+    const autoStartEnabled = isAutoStartEnabled();
     checks.push({
       id: "autostart",
       title: "Inicialização automática",
-      status: loginSettings.openAtLogin ? "pass" : "fail",
+      status: autoStartEnabled ? "pass" : "fail",
       blocking: true,
-      detail: loginSettings.openAtLogin
-        ? "O Ponte ID está registrado para iniciar após o login do Windows."
-        : "O auto-início ainda não está registrado no sistema.",
-      resolution: loginSettings.openAtLogin ? undefined : "Clique em Preparar este computador ou ative Iniciar com o Windows nas Configurações."
+      detail: autoStartEnabled
+        ? "O Ponte ID está registrado e habilitado para iniciar após o login do Windows."
+        : "O auto-início não está registrado ou foi desabilitado nas Aplicações de Arranque do Windows.",
+      resolution: autoStartEnabled ? undefined : "Clique em Preparar este computador e confirme no Gerenciador de Tarefas que Ponte ID está habilitado em Aplicativos de inicialização."
     });
 
     if (settings.demoMode) {

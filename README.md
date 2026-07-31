@@ -53,6 +53,14 @@ Também é possível disparar manualmente o workflow `Gerar instalador Windows` 
 
 O instalador atual não possui certificado comercial de assinatura de código. Até que um certificado seja configurado, o Windows SmartScreen pode solicitar confirmação adicional na primeira execução.
 
+## Persistência e inicialização
+
+Configurações, alunos sincronizados, histórico recente, fila pendente, associações Control iD e logs são mantidos no diretório de dados do Ponte ID dentro de `%APPDATA%`. O token ActiveSoft é criptografado com a proteção de credenciais do usuário do Windows. O aplicativo mantém também uma cópia de recuperação do arquivo local e o instalador não remove esses dados durante atualização ou desinstalação.
+
+O início automático é obrigatório: após o login na mesma conta do Windows usada na configuração, o Ponte ID inicia oculto e permanece na bandeja. Abrir o atalho quando ele já estiver em execução apenas mostra a janela existente. A validação da instalação também detecta quando a entrada foi desabilitada em `Gerenciador de Tarefas > Aplicativos de inicialização`.
+
+Como a criptografia do token e o auto-início pertencem à conta do Windows, a escola deve manter a mesma conta operacional. Para iniciar antes de qualquer login seria necessário separar o receptor em um Serviço do Windows; a aplicação atual inicia imediatamente após o login.
+
 ## Endpoints locais já aceitos
 
 - `POST /new_user_identified.fcgi`
