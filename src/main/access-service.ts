@@ -80,6 +80,34 @@ export class AccessService {
     });
   }
 
+  recordUnlinkedControlIdUser(
+    userId: number,
+    studentName: string | undefined,
+    direction: Direction,
+    occurredAt: string,
+    sourceId: string,
+    message: string,
+    photoContext: AccessPhotoContext = {}
+  ): AccessRecord {
+    const existing = this.store.getRecentAccesses().find((item) => item.id === sourceId);
+    if (existing) return existing;
+    const record: AccessRecord = {
+      id: sourceId,
+      studentId: 0,
+      studentName: studentName?.trim() || `Usuário Control iD ${userId}`,
+      matricula: "Não informada",
+      controlIdUserId: userId,
+      ...photoContext,
+      direction,
+      occurredAt,
+      status: "failed",
+      message
+    };
+    this.store.addAccess(record);
+    this.onChange();
+    return record;
+  }
+
   async retryQueue(): Promise<void> {
     if (this.processing) return;
     this.processing = true;

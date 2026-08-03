@@ -5,6 +5,8 @@ import { randomUUID } from "node:crypto";
 import { AccessRecord, ControlIdDeviceConfig, IntegrationLog, IntegrationLogCategory, PendingIdSecureAccess, PendingPhysicalTurn, Settings, Student, StudentSyncState } from "../shared/types";
 import { normalizeStudentSync } from "./student-cache-check";
 
+const MAX_ACCESS_HISTORY = 1_000;
+
 interface PersistedData {
   settings: Omit<Settings, "activeSoftToken" | "controlIdPassword" | "idSecurePassword"> & {
     encryptedToken?: string;
@@ -117,7 +119,7 @@ export class JsonStore {
   }
   getRecentAccesses(): AccessRecord[] { return [...this.data.recentAccesses]; }
   addAccess(record: AccessRecord): void {
-    this.data.recentAccesses = [record, ...this.data.recentAccesses.filter((item) => item.id !== record.id)].slice(0, 50);
+    this.data.recentAccesses = [record, ...this.data.recentAccesses.filter((item) => item.id !== record.id)].slice(0, MAX_ACCESS_HISTORY);
     this.persist();
   }
   getQueue(): AccessRecord[] { return [...this.data.queue]; }

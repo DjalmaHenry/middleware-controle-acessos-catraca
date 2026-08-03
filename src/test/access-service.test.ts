@@ -86,3 +86,34 @@ test("mantém na fila após falha e não reenvia depois de concluído", async ()
   assert.equal(third.status, "sent");
   assert.equal(sends, 2);
 });
+
+test("arquiva localmente um acesso sem matrícula sem chamar a ActiveSoft", () => {
+  const store = new MemoryAccessStore();
+  let sends = 0;
+  let changes = 0;
+  const service = new AccessService(
+    store as unknown as JsonStore,
+    { markAttendance: async () => { sends += 1; } } as unknown as ActiveSoftClient,
+    () => { changes += 1; },
+    () => undefined
+  );
+
+  const record = service.recordUnlinkedControlIdUser(
+    1001,
+    "Aluno sem matrícula",
+    "E",
+    "2026-08-03T12:00:00.000Z",
+    "idsecure:log:900",
+    "Matrícula ausente",
+    { idSecurePhotoPath: "image/log/900.jpg", controlIdDeviceName: "CATRACA 1" }
+  );
+
+  assert.equal(record.status, "failed");
+  assert.equal(record.matricula, "Não informada");
+  assert.equal(record.controlIdUserId, 1001);
+  assert.equal(record.idSecurePhotoPath, "image/log/900.jpg");
+  assert.equal(store.recent.length, 1);
+  assert.equal(store.queue.length, 0);
+  assert.equal(sends, 0);
+  assert.equal(changes, 1);
+});

@@ -3,6 +3,13 @@ let appState;
 let consoleFilter = "all";
 const photoCache = new Map();
 const photoRequests = new Map();
+const photoObserver = "IntersectionObserver" in window
+  ? new IntersectionObserver((entries) => entries.forEach((entry) => {
+    if (!entry.isIntersecting) return;
+    photoObserver.unobserve(entry.target);
+    hydrateAccessPhoto(entry.target);
+  }), { rootMargin: "120px" })
+  : null;
 
 const titles = {
   dashboard: ["Monitor de acesso", "Acompanhe as entradas em tempo real"],
@@ -26,6 +33,8 @@ function selectView(view, navButton) {
   $("#page-title").textContent = titles[view][0];
   $("#page-subtitle").textContent = titles[view][1];
   $("#sync-button").style.display = ["dashboard", "history"].includes(view) ? "block" : "none";
+  if (view === "history" && appState) renderHistory(appState);
+  hydrateAccessPhotos();
 }
 
 function escapeHtml(value) {
@@ -60,7 +69,7 @@ function render(state) {
     $("#last-access").innerHTML = `<div class="access-hero"><div class="access-photo-frame"><span class="access-photo-fallback"><img src="assets/ponte-id-logo.png" alt=""><b>${escapeHtml(studentInitial(latest.studentName))}</b></span>${accessPhotoImage(latest, "access-photo", `Foto de ${latest.studentName}`)}</div><div class="access-overlay"><span class="eyebrow">Último acesso</span><h2>${escapeHtml(latest.studentName)}</h2><p>${escapeHtml(latest.matricula)} · ${latest.direction === "E" ? "Entrada" : "Saída"}</p><div class="access-time"><strong>${parts.time}</strong><small>${parts.date}</small></div></div></div>`;
   }
   $("#recent-list").innerHTML = state.recentAccesses.length ? state.recentAccesses.slice(0, 7).map(recentRow).join("") : `<div class="empty-state" style="padding:55px 20px"><p>Nenhuma passagem registrada.</p></div>`;
-  $("#history-body").innerHTML = state.recentAccesses.map(historyRow).join("");
+  if ($("#history").classList.contains("active")) renderHistory(state);
   hydrateAccessPhotos();
   renderConsole(state);
   renderInstallationGuide(state);
@@ -198,12 +207,22 @@ async function runInstallationAction(action, message) {
 function recentRow(item) {
   const parts = timeParts(item.occurredAt);
   const avatar = `<span class="avatar-shell"><span class="recent-avatar">${escapeHtml(studentInitial(item.studentName))}</span>${accessPhotoImage(item, "avatar-photo", `Foto de ${item.studentName}`)}</span>`;
-  return `<div class="recent-item">${avatar}<div><strong>${escapeHtml(item.studentName)}</strong><small>${parts.time} · ${item.direction === "E" ? "Entrada" : "Saída"}</small></div><span class="status-pill ${item.status}">${item.status === "sent" ? "Enviado" : item.status === "queued" ? "Na fila" : "Enviando"}</span></div>`;
+  return `<div class="recent-item">${avatar}<div><strong>${escapeHtml(item.studentName)}</strong><small>${parts.time} · ${item.direction === "E" ? "Entrada" : "Saída"}</small></div>${accessStatus(item)}</div>`;
 }
 
 function historyRow(item) {
   const parts = timeParts(item.occurredAt);
-  return `<tr><td><div class="student-cell"><span class="avatar-shell history-avatar"><span class="recent-avatar">${escapeHtml(studentInitial(item.studentName))}</span>${accessPhotoImage(item, "avatar-photo", `Foto de ${item.studentName}`)}</span><strong>${escapeHtml(item.studentName)}</strong></div></td><td>${escapeHtml(item.matricula)}</td><td>${parts.date} às ${parts.time}</td><td>${item.direction === "E" ? "Entrada" : "Saída"}</td><td><span class="status-pill ${item.status}">${item.status === "sent" ? "Enviado" : "Na fila"}</span></td></tr>`;
+  return `<tr><td><div class="student-cell"><span class="avatar-shell history-avatar"><span class="recent-avatar">${escapeHtml(studentInitial(item.studentName))}</span>${accessPhotoImage(item, "avatar-photo", `Foto de ${item.studentName}`)}</span><strong>${escapeHtml(item.studentName)}</strong></div></td><td>${escapeHtml(item.matricula)}</td><td>${parts.date} às ${parts.time}</td><td>${item.direction === "E" ? "Entrada" : "Saída"}</td><td>${accessStatus(item)}</td></tr>`;
+}
+
+function renderHistory(state) {
+  $("#history-body").innerHTML = state.recentAccesses.map(historyRow).join("");
+}
+
+function accessStatus(item) {
+  const labels = { sent: "Enviado", queued: "Na fila", sending: "Enviando", failed: "Não enviado" };
+  const title = item.message ? ` title="${escapeHtml(item.message)}"` : "";
+  return `<span class="status-pill ${item.status}"${title}>${labels[item.status] || "Não enviado"}</span>`;
 }
 
 function accessPhotoImage(item, className, alt) {
@@ -215,23 +234,29 @@ function studentInitial(name) {
 }
 
 function hydrateAccessPhotos() {
+  photoObserver?.disconnect();
   document.querySelectorAll("img[data-access-photo-id]").forEach((image) => {
-    const accessId = image.dataset.accessPhotoId;
-    if (!accessId || image.dataset.photoLoading === "true") return;
-    image.dataset.photoLoading = "true";
-    void resolveAccessPhoto(accessId).then((source) => {
-      if (!image.isConnected || image.dataset.accessPhotoId !== accessId) return;
-      if (!source) {
-        image.remove();
-        return;
-      }
-      image.addEventListener("load", () => image.classList.add("is-ready"), { once: true });
-      image.addEventListener("error", () => {
-        photoCache.delete(accessId);
-        image.remove();
-      }, { once: true });
-      image.src = source;
-    });
+    if (photoObserver) photoObserver.observe(image);
+    else hydrateAccessPhoto(image);
+  });
+}
+
+function hydrateAccessPhoto(image) {
+  const accessId = image.dataset.accessPhotoId;
+  if (!accessId || image.dataset.photoLoading === "true") return;
+  image.dataset.photoLoading = "true";
+  void resolveAccessPhoto(accessId).then((source) => {
+    if (!image.isConnected || image.dataset.accessPhotoId !== accessId) return;
+    if (!source) {
+      image.remove();
+      return;
+    }
+    image.addEventListener("load", () => image.classList.add("is-ready"), { once: true });
+    image.addEventListener("error", () => {
+      photoCache.delete(accessId);
+      image.remove();
+    }, { once: true });
+    image.src = source;
   });
 }
 

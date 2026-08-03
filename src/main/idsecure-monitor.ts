@@ -81,6 +81,19 @@ interface MonitorAccessService {
       controlIdDeviceName?: string;
     }
   ): Promise<unknown>;
+  recordUnlinkedControlIdUser?(
+    userId: number,
+    studentName: string | undefined,
+    direction: Direction,
+    occurredAt: string,
+    sourceId: string,
+    message: string,
+    photoContext?: {
+      idSecurePhotoPath?: string;
+      controlIdUserId?: number;
+      controlIdDeviceName?: string;
+    }
+  ): unknown;
 }
 
 export interface JsonRequestOptions {
@@ -361,7 +374,36 @@ export class IdSecureMonitorService {
             registration = String(user.registration ?? "").trim();
           }
           if (!registration) {
-            throw new Error(`O usuário ${pending.userId} (${pending.name || "sem nome"}) não possui matrícula no iDSecure.`);
+            const message = `O usuário ${pending.userId} (${pending.name || "sem nome"}) não possui matrícula no iDSecure.`;
+            if (pending.attempts < 1) throw new Error(message);
+            if (!this.accessService.recordUnlinkedControlIdUser) {
+              throw new Error("O serviço de histórico local não está disponível.");
+            }
+            const direction = directionFor(pending.info, settings.direction);
+            await this.accessService.recordUnlinkedControlIdUser(
+              pending.userId,
+              pending.name,
+              direction,
+              parseIdSecureDate(pending.time),
+              sourceId,
+              message,
+              {
+                idSecurePhotoPath: pending.photoPath,
+                controlIdUserId: pending.userId,
+                controlIdDeviceName: pending.device
+              }
+            );
+            this.onDirection(direction);
+            this.store.markProcessedControlIdAccess(sourceId);
+            this.store.removePendingIdSecureAccess(pending.idLog);
+            this.log("system", "Acesso arquivado sem envio à ActiveSoft", {
+              idLog: pending.idLog,
+              idUser: pending.userId,
+              name: pending.name || null,
+              reason: "Matrícula ausente no campo registration do iDSecure",
+              attempts: pending.attempts + 1
+            });
+            continue;
           }
 
           const direction = directionFor(pending.info, settings.direction);
@@ -452,7 +494,7 @@ export class IdSecureMonitorService {
 
   private async loadUserWithRetry(settings: Settings, userId: number, name?: string): Promise<IdSecureUser> {
     const cached = this.users.get(String(userId));
-    if (cached) {
+    if (cached && String(cached.registration ?? "").trim()) {
       this.log("system", "Cadastro iDSecure reutilizado", {
         idUser: userId,
         name: cached.name || name || null,
@@ -460,6 +502,7 @@ export class IdSecureMonitorService {
       });
       return cached;
     }
+    if (cached) this.users.delete(String(userId));
     let token = await this.tokenFor(settings);
     try {
       return await this.loadUser(settings, token, userId, name);
