@@ -226,7 +226,11 @@ function accessStatus(item) {
 }
 
 function accessPhotoImage(item, className, alt) {
-  return `<img class="${className}" data-access-photo-id="${escapeHtml(item.id)}" alt="${escapeHtml(alt)}" decoding="async">`;
+  const cached = photoCache.get(item.id);
+  const cachedSource = cached?.value && cached.expiresAt > Date.now() ? cached.value : null;
+  const readyClass = cachedSource ? " is-ready" : "";
+  const source = cachedSource ? ` src="${escapeHtml(cachedSource)}"` : "";
+  return `<img class="${className}${readyClass}" data-access-photo-id="${escapeHtml(item.id)}"${source} alt="${escapeHtml(alt)}" decoding="async">`;
 }
 
 function studentInitial(name) {
@@ -243,7 +247,7 @@ function hydrateAccessPhotos() {
 
 function hydrateAccessPhoto(image) {
   const accessId = image.dataset.accessPhotoId;
-  if (!accessId || image.dataset.photoLoading === "true") return;
+  if (!accessId || image.dataset.photoLoading === "true" || image.classList.contains("is-ready")) return;
   image.dataset.photoLoading = "true";
   void resolveAccessPhoto(accessId).then((source) => {
     if (!image.isConnected || image.dataset.accessPhotoId !== accessId) return;
