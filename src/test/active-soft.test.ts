@@ -101,12 +101,13 @@ test("envia a frequência com matrícula textual e autenticação Bearer", async
   };
   try {
     const client = new ActiveSoftClient(() => settings, () => undefined);
-    await client.markAttendance("0011226", "E", "2026-07-30T12:00:00.000Z");
+    const occurredAt = new Date(2026, 6, 30, 12, 34, 56, 789).toISOString();
+    await client.markAttendance("0011226", "E", occurredAt);
     assert.match(captured?.url ?? "", /\/api\/v0\/marcar_frequencia_aluno\/$/);
     assert.equal(captured?.init?.method, "POST");
     assert.equal((captured?.init?.headers as Record<string, string>).Authorization, "Bearer test-token");
     assert.deepEqual(JSON.parse(String(captured?.init?.body)), {
-      data_hora: "2026-07-30T12:00:00.000Z",
+      data_hora: "2026-07-30T12:34:56.789",
       tipo_entrada_saida: "E",
       matricula: "0011226",
       comentario: "Catraca Control iD"

@@ -38,7 +38,7 @@ export class ActiveSoftClient {
     await this.request(this.url("/api/v0/marcar_frequencia_aluno/"), {
       method: "POST",
       body: JSON.stringify({
-        data_hora: occurredAt,
+        data_hora: toActiveSoftLocalDateTime(occurredAt),
         tipo_entrada_saida: direction,
         matricula,
         comentario: "Catraca Control iD"
@@ -125,6 +125,16 @@ function isStudentListingUrl(value: string): boolean {
 function parseJsonOrText(value?: string): unknown {
   if (!value) return undefined;
   try { return JSON.parse(value); } catch { return value; }
+}
+
+function toActiveSoftLocalDateTime(value: string): string {
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) throw new Error(`Data de acesso inválida: ${value}`);
+  const pad = (part: number, length = 2) => String(part).padStart(length, "0");
+  return [
+    `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`,
+    `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}.${pad(date.getMilliseconds(), 3)}`
+  ].join("T");
 }
 
 function parseBearerChallenge(header: string | null): { error?: string; description?: string } | undefined {
