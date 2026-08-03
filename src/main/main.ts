@@ -270,6 +270,21 @@ function registerIpc(): void {
     return state();
   });
   ipcMain.handle("sync:run", synchronize);
+  ipcMain.handle("queue:clear", async () => {
+    try {
+      await controlIdPolling.stopAndWait();
+      await idSecureMonitor.stopAndWait();
+      await controlIdServer.stop();
+      await accessService.waitUntilIdle();
+      const removed = store.clearPendingWork("Removido manualmente da fila de envio.");
+      integrationLog("system", "Fila de envio zerada manualmente", removed);
+    } finally {
+      await configureControlIdTransport();
+      await idSecureMonitor.restart();
+    }
+    broadcastState();
+    return state();
+  });
   ipcMain.handle("connection:test", async () => { await activeSoft.testConnection(); return true; });
   ipcMain.handle("photo:get", async (_event, accessId: string) => {
     if (typeof accessId !== "string" || accessId.length > 100) return null;

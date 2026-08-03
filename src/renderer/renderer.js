@@ -62,6 +62,7 @@ function render(state) {
   activeDot.className = `dot ${state.activeSoft.status === "online" ? "ok" : state.activeSoft.status === "offline" ? "bad" : ""}`;
   $("#active-status").textContent = state.activeSoft.status === "online" ? "Conectada" : state.activeSoft.status === "offline" ? "Sem conexão" : "Aguardando teste";
   $("#queue-status").textContent = `${state.pendingCount} ${state.pendingCount === 1 ? "pendência" : "pendências"}`;
+  $("#clear-queue").hidden = state.pendingCount === 0;
   $("#student-count").textContent = `${state.students.length} sincronizados`;
   const latest = state.recentAccesses[0];
   if (latest) {
@@ -364,6 +365,21 @@ $("#settings-form").addEventListener("submit", async (event) => {
 });
 
 $("#sync-button").addEventListener("click", async () => { $("#sync-button").disabled = true; try { await window.ponte.synchronize(); } finally { $("#sync-button").disabled = false; } });
+$("#clear-queue").addEventListener("click", async () => {
+  if (!window.confirm("Zerar todas as pendências? Os registros já exibidos continuarão no histórico como não enviados.")) return;
+  const button = $("#clear-queue");
+  button.disabled = true;
+  button.textContent = "Limpando...";
+  try {
+    const state = await window.ponte.clearQueue();
+    render(state);
+  } catch (error) {
+    window.alert(`Não foi possível zerar a fila: ${error.message}`);
+  } finally {
+    button.disabled = false;
+    button.textContent = "Zerar fila";
+  }
+});
 $("#clear-console").addEventListener("click", () => window.ponte.clearLogs());
 document.querySelectorAll(".console-filter").forEach((button) => {
   button.addEventListener("click", () => selectConsoleFilter(button.dataset.category));

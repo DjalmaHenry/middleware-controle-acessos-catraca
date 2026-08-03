@@ -20,3 +20,4 @@ main{display:flex;flex-direction:column;height:100vh;min-height:0;overflow:auto}
 #dashboard .activity-panel{display:flex;flex-direction:column;min-height:0}
 #dashboard .recent-list{flex:1;max-height:none;min-height:0}
 @media(min-width:1001px){#dashboard .monitor-grid{grid-template-rows:minmax(430px,1fr)}}
+.queue-clear{display:block;margin-top:6px;padding:0;border:0;background:transparent;color:#a33838;font-size:10px;font-weight:700;cursor:pointer}.queue-clear:hover{text-decoration:underline}.queue-clear:disabled{color:#829089;cursor:wait;text-decoration:none}

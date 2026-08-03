@@ -118,6 +118,14 @@ export class AccessService {
     }
   }
 
+  async waitUntilIdle(timeoutMs = 20_000): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
+    while (this.processing || this.inFlight.size > 0) {
+      if (Date.now() >= deadline) throw new Error("Há um envio à ActiveSoft ainda em andamento. Aguarde alguns segundos e tente novamente.");
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+  }
+
   private sendOnce(record: AccessRecord): Promise<AccessRecord> {
     const existing = this.inFlight.get(record.id);
     if (existing) return existing;

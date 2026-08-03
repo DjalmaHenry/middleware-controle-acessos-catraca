@@ -51,6 +51,15 @@ export class ControlIdPollingService {
     this.lastEventIds.clear();
   }
 
+  async stopAndWait(timeoutMs = 20_000): Promise<void> {
+    this.stop();
+    const deadline = Date.now() + timeoutMs;
+    while (this.running) {
+      if (Date.now() >= deadline) throw new Error("A consulta das catracas ainda está em andamento. Aguarde alguns segundos e tente novamente.");
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+  }
+
   async restart(): Promise<void> {
     this.stop();
     await this.pollNow();

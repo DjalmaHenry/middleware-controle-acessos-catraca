@@ -30,6 +30,21 @@ interface PersistedData {
   processedControlIdAccesses: Record<string, string>;
 }
 
+export interface PendingWorkState {
+  recentAccesses: AccessRecord[];
+  queue: AccessRecord[];
+  pendingControlIdAccesses: Record<string, { userId: number; time: number; registration?: string }>;
+  pendingIdSecureAccesses: Record<string, PendingIdSecureAccess>;
+  pendingPhysicalTurns: Record<string, PendingPhysicalTurn>;
+}
+
+export interface ClearedPendingWork {
+  activeSoft: number;
+  idSecure: number;
+  controlId: number;
+  physicalTurns: number;
+}
+
 const defaults: PersistedData = {
   settings: {
     configured: false,
@@ -128,6 +143,11 @@ export class JsonStore {
     this.persist();
   }
   dequeue(id: string): void { this.data.queue = this.data.queue.filter((item) => item.id !== id); this.persist(); }
+  clearPendingWork(message: string): ClearedPendingWork {
+    const result = clearPendingWorkState(this.data, message);
+    this.persist();
+    return result;
+  }
   getIntegrationLogs(): IntegrationLog[] {
     return this.data.integrationLogs.filter((entry) => !isNoisyStudentListingLog(entry));
   }
@@ -257,6 +277,24 @@ export class JsonStore {
       return undefined;
     }
   }
+}
+
+export function clearPendingWorkState(data: PendingWorkState, message: string): ClearedPendingWork {
+  const queuedIds = new Set(data.queue.map((record) => record.id));
+  const result = {
+    activeSoft: data.queue.length,
+    idSecure: Object.keys(data.pendingIdSecureAccesses).length,
+    controlId: Object.keys(data.pendingControlIdAccesses).length,
+    physicalTurns: Object.keys(data.pendingPhysicalTurns).length
+  };
+  data.recentAccesses = data.recentAccesses.map((record) => queuedIds.has(record.id)
+    ? { ...record, status: "failed", message }
+    : record);
+  data.queue = [];
+  data.pendingIdSecureAccesses = {};
+  data.pendingControlIdAccesses = {};
+  data.pendingPhysicalTurns = {};
+  return result;
 }
 
 function normalizePersistedData(loaded: Partial<PersistedData>): PersistedData {

@@ -196,6 +196,15 @@ export class IdSecureMonitorService {
     this.tokenExpiresAt = 0;
   }
 
+  async stopAndWait(timeoutMs = 20_000): Promise<void> {
+    this.stop();
+    const deadline = Date.now() + timeoutMs;
+    while (this.running || this.processingPending) {
+      if (Date.now() >= deadline) throw new Error("A consulta do iDSecure ainda está em andamento. Aguarde alguns segundos e tente novamente.");
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+  }
+
   async testConnection(): Promise<void> {
     const settings = this.getSettings();
     this.validateSettings(settings);
