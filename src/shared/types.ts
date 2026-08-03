@@ -47,6 +47,9 @@ export interface AccessRecord {
   studentName: string;
   matricula: string;
   photoUrl?: string;
+  idSecurePhotoPath?: string;
+  controlIdUserId?: number;
+  controlIdDeviceName?: string;
   direction: Direction;
   occurredAt: string;
   status: "sending" | "sent" | "queued" | "failed";
@@ -101,6 +104,7 @@ export interface PendingIdSecureAccess {
   registration?: string;
   name?: string;
   device?: string;
+  photoPath?: string;
   info?: string;
   time?: string;
   receivedAt?: string;

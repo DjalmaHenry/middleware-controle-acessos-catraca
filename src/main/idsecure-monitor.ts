@@ -4,6 +4,7 @@ import { AccessService } from "./access-service";
 import { IntegrationLogger } from "./integration-logger";
 import { JsonStore } from "./store";
 import { Direction, PendingIdSecureAccess, PendingPhysicalTurn, Settings } from "../shared/types";
+import { detectImageMime } from "./photo-service";
 
 const POLL_INTERVAL_MS = 3_000;
 const REQUEST_TIMEOUT_MS = 15_000;
@@ -21,6 +22,7 @@ interface IdSecureAccess {
   device?: string;
   info?: string;
   time?: string;
+  ipCamera?: string;
   [key: string]: unknown;
 }
 
@@ -72,7 +74,12 @@ interface MonitorAccessService {
     direction?: Direction,
     occurredAt?: string,
     registration?: string,
-    sourceId?: string
+    sourceId?: string,
+    photoContext?: {
+      idSecurePhotoPath?: string;
+      controlIdUserId?: number;
+      controlIdDeviceName?: string;
+    }
   ): Promise<unknown>;
 }
 
@@ -88,6 +95,11 @@ export type JsonRequester = (url: URL, options: JsonRequestOptions) => Promise<{
   body: Record<string, unknown>;
 }>;
 
+export type BinaryRequester = (url: URL, headers: Record<string, string>, timeoutMs?: number) => Promise<{
+  status: number;
+  body: Buffer;
+}>;
+
 export class IdSecureMonitorService {
   private timer?: NodeJS.Timeout;
   private running = false;
@@ -97,6 +109,7 @@ export class IdSecureMonitorService {
   private lastError?: { message: string; loggedAt: number };
   private lastIdleLogAt = 0;
   private processingPending = false;
+  private readonly photoCache = new Map<string, { value: string | null; expiresAt: number }>();
 
   constructor(
     private readonly accessService: MonitorAccessService | AccessService,
@@ -105,8 +118,56 @@ export class IdSecureMonitorService {
     private readonly log: IntegrationLogger,
     private readonly onStatus: (status: IdSecureMonitorStatus) => void = () => undefined,
     private readonly onDirection: (direction: Direction) => void = () => undefined,
-    private readonly requester: JsonRequester = defaultJsonRequester
+    private readonly requester: JsonRequester = defaultJsonRequester,
+    private readonly binaryRequester: BinaryRequester = defaultBinaryRequester
   ) {}
+
+  async resolveAccessPhoto(photoPath?: string): Promise<string | null> {
+    if (!photoPath) return null;
+    const settings = this.getSettings();
+    let url: URL;
+    try {
+      url = idSecureImageUrl(settings.idSecureBaseUrl, photoPath);
+    } catch (error) {
+      this.log("error", "Caminho de foto inválido recebido do iDSecure", {
+        path: photoPath,
+        message: error instanceof Error ? error.message : String(error)
+      });
+      return null;
+    }
+
+    const cacheKey = url.toString();
+    const cached = this.photoCache.get(cacheKey);
+    if (cached && cached.expiresAt > Date.now()) return cached.value;
+    if (cached) this.photoCache.delete(cacheKey);
+
+    try {
+      let token = await this.tokenFor(settings);
+      let response = await this.requestPhoto(url, token);
+      if (response.status === 401) {
+        this.clearToken();
+        token = await this.tokenFor(settings);
+        response = await this.requestPhoto(url, token);
+      }
+      if (response.status < 200 || response.status >= 300) {
+        throw new Error(`Servidor respondeu HTTP ${response.status}.`);
+      }
+      const mime = detectImageMime(response.body);
+      if (!mime) throw new Error("O conteúdo recebido não é uma imagem compatível.");
+      const value = `data:${mime};base64,${response.body.toString("base64")}`;
+      this.photoCache.set(cacheKey, { value, expiresAt: Date.now() + 6 * 60 * 60_000 });
+      trimPhotoCache(this.photoCache);
+      return value;
+    } catch (error) {
+      this.photoCache.set(cacheKey, { value: null, expiresAt: Date.now() + 30_000 });
+      trimPhotoCache(this.photoCache);
+      this.log("error", "Não foi possível obter a foto do acesso no iDSecure", {
+        path: url.pathname,
+        message: error instanceof Error ? error.message : String(error)
+      });
+      return null;
+    }
+  }
 
   async restart(): Promise<void> {
     this.stop();
@@ -235,6 +296,7 @@ export class IdSecureMonitorService {
         name: access.name || null,
         device: access.device || null,
         direction: access.info || null,
+        photoAvailable: Boolean(access.ipCamera),
         occurredAt: parseIdSecureDate(access.time)
       });
 
@@ -251,6 +313,7 @@ export class IdSecureMonitorService {
         userId: Number(access.idUser),
         name: access.name,
         device: access.device,
+        photoPath: typeof access.ipCamera === "string" ? access.ipCamera : undefined,
         info: access.info,
         time: access.time,
         receivedAt: new Date().toISOString(),
@@ -309,7 +372,12 @@ export class IdSecureMonitorService {
             direction,
             parseIdSecureDate(pending.time),
             registration,
-            sourceId
+            sourceId,
+            {
+              idSecurePhotoPath: pending.photoPath,
+              controlIdUserId: pending.userId,
+              controlIdDeviceName: pending.device
+            }
           );
           this.onDirection(direction);
           this.store.markProcessedControlIdAccess(sourceId);
@@ -510,6 +578,13 @@ export class IdSecureMonitorService {
     return response.body;
   }
 
+  private requestPhoto(url: URL, token: string): Promise<{ status: number; body: Buffer }> {
+    return this.binaryRequester(url, {
+      Accept: "image/avif,image/webp,image/png,image/jpeg,image/*",
+      Authorization: `Bearer ${token}`
+    }, REQUEST_TIMEOUT_MS);
+  }
+
   private validateSettings(settings: Settings): void {
     const origin = originFor(settings.idSecureBaseUrl);
     if (!origin) throw new Error("Informe um endereço HTTPS válido para o iDSecure.");
@@ -575,6 +650,40 @@ export async function defaultJsonRequester(url: URL, options: JsonRequestOptions
   });
 }
 
+export async function defaultBinaryRequester(
+  url: URL,
+  headers: Record<string, string>,
+  timeoutMs = REQUEST_TIMEOUT_MS
+): Promise<{ status: number; body: Buffer }> {
+  if (!["http:", "https:"].includes(url.protocol)) throw new Error(`Protocolo não suportado: ${url.protocol}`);
+  const request = url.protocol === "https:" ? httpsRequest : httpRequest;
+  return new Promise((resolve, reject) => {
+    const outgoing = request(url, {
+      method: "GET",
+      headers,
+      ...(url.protocol === "https:" ? { rejectUnauthorized: false } : {})
+    }, (response) => {
+      const chunks: Buffer[] = [];
+      let size = 0;
+      response.on("data", (chunk: Buffer) => {
+        size += chunk.length;
+        if (size > MAX_RESPONSE_BYTES) {
+          outgoing.destroy(new Error("A foto do iDSecure excedeu o limite de 5 MB."));
+          return;
+        }
+        chunks.push(chunk);
+      });
+      response.on("end", () => resolve({
+        status: response.statusCode ?? 0,
+        body: Buffer.concat(chunks, size)
+      }));
+    });
+    outgoing.setTimeout(timeoutMs, () => outgoing.destroy(new Error(`Tempo limite ao acessar ${url.origin}.`)));
+    outgoing.on("error", reject);
+    outgoing.end();
+  });
+}
+
 class HttpError extends Error {
   constructor(readonly status: number, message: string) {
     super(message);
@@ -601,6 +710,23 @@ function apiUrl(baseUrl: string, pathname: string): URL {
   const base = new URL(baseUrl);
   if (!['http:', 'https:'].includes(base.protocol)) throw new Error("O endereço do iDSecure deve usar HTTP ou HTTPS.");
   return new URL(pathname, base.origin);
+}
+
+function idSecureImageUrl(baseUrl: string, photoPath: string): URL {
+  const base = new URL(baseUrl);
+  const target = new URL(photoPath, `${base.origin}/`);
+  if (target.origin !== base.origin || !target.pathname.startsWith("/image/")) {
+    throw new Error("A foto não pertence ao servidor iDSecure configurado.");
+  }
+  return target;
+}
+
+function trimPhotoCache(cache: Map<string, { value: string | null; expiresAt: number }>): void {
+  while (cache.size > 60) {
+    const oldest = cache.keys().next().value as string | undefined;
+    if (!oldest) return;
+    cache.delete(oldest);
+  }
 }
 
 function originFor(baseUrl: string): string {

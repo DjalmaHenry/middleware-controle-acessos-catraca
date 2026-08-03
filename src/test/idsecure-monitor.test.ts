@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { IdSecureMonitorService, IdSecureRequestTimeoutError, JsonRequester } from "../main/idsecure-monitor";
+import { BinaryRequester, IdSecureMonitorService, IdSecureRequestTimeoutError, JsonRequester } from "../main/idsecure-monitor";
 import { Direction, PendingIdSecureAccess, PendingPhysicalTurn, Settings } from "../shared/types";
 
 const settings: Settings = {
@@ -63,18 +63,18 @@ test("processa o monitor Enterprise por idLog e resolve a matrícula", async () 
       body: {
         data: [
           { idLog: 175325, eventCode: 3, eventName: "Não identificado", idUser: 0, device: "CATRACA 2", time: "/Date(1785512840000-0300)/" },
-          { idLog: 175326, eventCode: 7, eventName: "Acesso autorizado", idUser: 1001440, name: "clelio", device: "CATRACA 2", info: "Saída", time: "/Date(1785512850000-0300)/" }
+          { idLog: 175326, eventCode: 7, eventName: "Acesso autorizado", idUser: 1001440, name: "clelio", device: "CATRACA 2", info: "Saída", time: "/Date(1785512850000-0300)/", ipCamera: "image/log/175326.jpg" }
         ]
       }
     };
   };
-  const attendance: Array<{ userId: number; direction?: Direction; registration?: string; occurredAt?: string; sourceId?: string }> = [];
+  const attendance: Array<{ userId: number; direction?: Direction; registration?: string; occurredAt?: string; sourceId?: string; photoPath?: string }> = [];
   const logs: Array<{ category: string; title: string }> = [];
   const directions: Direction[] = [];
   const service = new IdSecureMonitorService(
     {
-      registerControlIdUser: async (userId, direction, occurredAt, registration, sourceId) => {
-        attendance.push({ userId, direction, occurredAt, registration, sourceId });
+      registerControlIdUser: async (userId, direction, occurredAt, registration, sourceId, photoContext) => {
+        attendance.push({ userId, direction, occurredAt, registration, sourceId, photoPath: photoContext?.idSecurePhotoPath });
       }
     },
     store,
@@ -97,7 +97,8 @@ test("processa o monitor Enterprise por idLog e resolve a matrícula", async () 
     direction: "S",
     registration: "0054",
     occurredAt: "2026-07-31T15:47:30.000Z",
-    sourceId: "idsecure:log:175326"
+    sourceId: "idsecure:log:175326",
+    photoPath: "image/log/175326.jpg"
   }]);
   assert.equal(store.cursor, 175326);
   assert.equal(store.mappings.get("1001440"), "0054");
@@ -111,6 +112,35 @@ test("processa o monitor Enterprise por idLog e resolve a matrícula", async () 
 
   await service.pollNow();
   assert.equal(attendance.length, 1, "um idLog repetido não pode gerar presença duplicada");
+});
+
+test("obtém a foto capturada pelo iDSecure usando o Bearer do painel", async () => {
+  const store = new MemoryStore();
+  const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10]);
+  let receivedUrl = "";
+  let receivedAuthorization = "";
+  const requester: JsonRequester = async () => ({ status: 200, body: { accessToken: "token-foto" } });
+  const binaryRequester: BinaryRequester = async (url, headers) => {
+    receivedUrl = url.toString();
+    receivedAuthorization = headers.Authorization;
+    return { status: 200, body: jpeg };
+  };
+  const service = new IdSecureMonitorService(
+    { registerControlIdUser: async () => undefined },
+    store,
+    () => settings,
+    () => undefined,
+    () => undefined,
+    () => undefined,
+    requester,
+    binaryRequester
+  );
+
+  const result = await service.resolveAccessPhoto("image/log/175324.jpg");
+
+  assert.equal(receivedUrl, "https://192.168.1.2:30443/image/log/175324.jpg");
+  assert.equal(receivedAuthorization, "Bearer token-foto");
+  assert.equal(result, `data:image/jpeg;base64,${jpeg.toString("base64")}`);
 });
 
 test("refaz o login quando o Bearer expira", async () => {

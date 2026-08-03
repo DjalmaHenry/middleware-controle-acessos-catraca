@@ -97,6 +97,36 @@ test("renova a sessão expirada da catraca", async () => {
   assert.equal(loginCount, 2);
 });
 
+test("obtém a foto cadastrada diretamente na catraca", async () => {
+  const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10]);
+  const requests: string[] = [];
+  const fetchImpl: typeof fetch = async (input) => {
+    const url = String(input);
+    requests.push(url);
+    if (url.includes("/login.fcgi")) return Response.json({ session: "photo-session" });
+    if (url.includes("/user_get_image.fcgi")) return new Response(jpeg, {
+      status: 200,
+      headers: { "content-type": "image/jpeg" }
+    });
+    return Response.json({ access_events: [] });
+  };
+  const service = new ControlIdPollingService(
+    {},
+    new MemoryPollingStore(),
+    () => settings,
+    () => undefined,
+    () => undefined,
+    async () => false,
+    fetchImpl
+  );
+
+  const result = await service.resolveUserPhoto(1001440, "CATRACA 1");
+
+  assert.match(requests.at(-1) ?? "", /\/user_get_image\.fcgi\?/);
+  assert.match(requests.at(-1) ?? "", /user_id=1001440/);
+  assert.equal(result, `data:image/jpeg;base64,${jpeg.toString("base64")}`);
+});
+
 test("não avança o cursor quando a correlação falha e retoma todos os giros", async () => {
   const store = new MemoryPollingStore();
   store.cursors.set("192.168.1.189:80", 10);

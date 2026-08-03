@@ -3,8 +3,10 @@ import { PhysicalTurnEvent } from "./idsecure-monitor";
 import { IntegrationLogger } from "./integration-logger";
 import { JsonStore } from "./store";
 import { ControlIdDeviceConfig, ControlIdDeviceContact, Settings } from "../shared/types";
+import { detectImageMime } from "./photo-service";
 
 const POLL_INTERVAL_MS = 5_000;
+const MAX_PHOTO_BYTES = 5 * 1024 * 1024;
 
 interface AccessEvent {
   id: number | string;
@@ -28,6 +30,7 @@ export class ControlIdPollingService {
   private readonly sessions = new Map<string, string>();
   private readonly lastEventIds = new Map<string, number>();
   private readonly lastErrors = new Map<string, { message: string; loggedAt: number }>();
+  private readonly photoCache = new Map<string, { value: string | null; expiresAt: number }>();
 
   constructor(
     _accessService: AccessService | unknown,
@@ -73,6 +76,40 @@ export class ControlIdPollingService {
     } finally {
       this.running = false;
     }
+  }
+
+  async resolveUserPhoto(userId?: number, preferredDeviceName?: string): Promise<string | null> {
+    if (!userId) return null;
+    const settings = this.getSettings();
+    if (settings.controlIdMode !== "polling" || !settings.controlIdPassword) return null;
+    const preferred = normalizeDeviceName(preferredDeviceName);
+    const devices = settings.controlIdDevices
+      .filter((device) => device.enabled)
+      .sort((left, right) => Number(normalizeDeviceName(right.name) === preferred) - Number(normalizeDeviceName(left.name) === preferred));
+
+    for (const device of devices) {
+      const cacheKey = `${keyFor(device)}:${userId}`;
+      const cached = this.photoCache.get(cacheKey);
+      if (cached && cached.expiresAt > Date.now()) {
+        if (cached.value) return cached.value;
+        continue;
+      }
+      if (cached) this.photoCache.delete(cacheKey);
+
+      try {
+        const value = await this.loadUserPhoto(device, settings, userId);
+        this.photoCache.set(cacheKey, {
+          value,
+          expiresAt: Date.now() + (value ? 6 * 60 * 60_000 : 30_000)
+        });
+        this.trimPhotoCache();
+        if (value) return value;
+      } catch {
+        this.photoCache.set(cacheKey, { value: null, expiresAt: Date.now() + 30_000 });
+        this.trimPhotoCache();
+      }
+    }
+    return null;
   }
 
   private async pollDevice(device: ControlIdDeviceConfig, settings: Settings): Promise<void> {
@@ -213,6 +250,44 @@ export class ControlIdPollingService {
     return payload;
   }
 
+  private async loadUserPhoto(
+    device: ControlIdDeviceConfig,
+    settings: Settings,
+    userId: number
+  ): Promise<string | null> {
+    let session = await this.sessionFor(device, settings);
+    let response = await this.requestUserPhoto(device, session, userId);
+    if (response.status === 401 || response.status === 403) {
+      this.sessions.delete(keyFor(device));
+      session = await this.sessionFor(device, settings);
+      response = await this.requestUserPhoto(device, session, userId);
+    }
+    if (!response.ok) return null;
+    const declaredSize = Number(response.headers.get("content-length"));
+    if (Number.isFinite(declaredSize) && declaredSize > MAX_PHOTO_BYTES) return null;
+    const bytes = Buffer.from(await response.arrayBuffer());
+    if (bytes.length > MAX_PHOTO_BYTES) return null;
+    const mime = detectImageMime(bytes);
+    return mime ? `data:${mime};base64,${bytes.toString("base64")}` : null;
+  }
+
+  private requestUserPhoto(device: ControlIdDeviceConfig, session: string, userId: number): Promise<Response> {
+    const params = new URLSearchParams({ user_id: String(userId), session });
+    return this.fetchImpl(`${baseUrl(device)}/user_get_image.fcgi?${params}`, {
+      method: "GET",
+      headers: { Accept: "image/jpeg,image/*" },
+      signal: AbortSignal.timeout(8_000)
+    });
+  }
+
+  private trimPhotoCache(): void {
+    while (this.photoCache.size > 100) {
+      const oldest = this.photoCache.keys().next().value as string | undefined;
+      if (!oldest) return;
+      this.photoCache.delete(oldest);
+    }
+  }
+
   private registerContact(
     device: ControlIdDeviceConfig,
     path: string,
@@ -258,6 +333,10 @@ function normalizePhysicalEvent(value: unknown): PhysicalTurnEvent | undefined {
   const normalized = String(value ?? "").trim().replaceAll(" ", "_").toUpperCase();
   if (normalized === "TURN_LEFT" || normalized === "TURN_RIGHT" || normalized === "GIVE_UP") return normalized;
   return undefined;
+}
+
+function normalizeDeviceName(value: unknown): string {
+  return String(value ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-zA-Z0-9]/g, "").toLowerCase();
 }
 
 function isSessionError(error: unknown): boolean {

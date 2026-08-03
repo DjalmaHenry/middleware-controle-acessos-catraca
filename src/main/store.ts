@@ -104,6 +104,14 @@ export class JsonStore {
   }
   saveStudents(students: Student[]): void {
     this.data.students = students;
+    const byId = new Map(students.map((student) => [student.id, student]));
+    const byRegistration = new Map(students.map((student) => [normalizeRegistration(student.matricula), student]));
+    const refreshPhoto = (access: AccessRecord): AccessRecord => {
+      const student = byId.get(access.studentId) ?? byRegistration.get(normalizeRegistration(access.matricula));
+      return student?.urlFoto ? { ...access, photoUrl: student.urlFoto } : access;
+    };
+    this.data.recentAccesses = this.data.recentAccesses.map(refreshPhoto);
+    this.data.queue = this.data.queue.map(refreshPhoto);
     this.data.studentSync = { syncedAt: new Date().toISOString() };
     this.persist();
   }
@@ -311,6 +319,7 @@ function normalizePendingIdSecureAccesses(value: unknown): Record<string, Pendin
       registration: typeof source.registration === "string" ? source.registration : undefined,
       name: typeof source.name === "string" ? source.name : undefined,
       device: typeof source.device === "string" ? source.device : undefined,
+      photoPath: typeof source.photoPath === "string" ? source.photoPath : undefined,
       info: typeof source.info === "string" ? source.info : undefined,
       time: typeof source.time === "string" ? source.time : undefined,
       receivedAt: typeof source.receivedAt === "string" ? source.receivedAt : undefined,
@@ -320,6 +329,10 @@ function normalizePendingIdSecureAccesses(value: unknown): Record<string, Pendin
       lastError: typeof source.lastError === "string" ? source.lastError : undefined
     } satisfies PendingIdSecureAccess]];
   }));
+}
+
+function normalizeRegistration(value: string): string {
+  return value.trim().replace(/^0+(?=\d)/, "");
 }
 
 function normalizeSettings(value: unknown): PersistedData["settings"] {

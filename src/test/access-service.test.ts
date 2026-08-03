@@ -42,13 +42,19 @@ test("deduplica chamadas simultâneas pelo idLog do iDSecure", async () => {
   );
 
   await Promise.all([
-    service.registerControlIdUser(99, "E", "2026-07-31T15:47:30.000Z", "0054", "idsecure:log:175324"),
+    service.registerControlIdUser(99, "E", "2026-07-31T15:47:30.000Z", "0054", "idsecure:log:175324", {
+      idSecurePhotoPath: "image/log/175324.jpg",
+      controlIdDeviceName: "CATRACA 2"
+    }),
     service.registerControlIdUser(99, "E", "2026-07-31T15:47:30.000Z", "0054", "idsecure:log:175324")
   ]);
 
   assert.equal(sends, 1);
   assert.equal(store.recent[0].id, "idsecure:log:175324");
   assert.equal(store.recent[0].status, "sent");
+  assert.equal(store.recent[0].controlIdUserId, 99);
+  assert.equal(store.recent[0].controlIdDeviceName, "CATRACA 2");
+  assert.equal(store.recent[0].idSecurePhotoPath, "image/log/175324.jpg");
   assert.ok(logs.some((entry) => entry.title === "Matrícula iDSecure associada ao aluno ActiveSoft"));
 });
 

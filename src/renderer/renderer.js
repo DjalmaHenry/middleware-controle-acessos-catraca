@@ -57,7 +57,7 @@ function render(state) {
   const latest = state.recentAccesses[0];
   if (latest) {
     const parts = timeParts(latest.occurredAt);
-    $("#last-access").innerHTML = `<div class="access-hero"><div class="access-photo-frame"><span class="access-photo-fallback">${escapeHtml(studentInitial(latest.studentName))}</span>${accessPhotoImage(latest, "access-photo", `Foto de ${latest.studentName}`)}</div><div class="access-overlay"><span class="eyebrow">Último acesso</span><h2>${escapeHtml(latest.studentName)}</h2><p>${escapeHtml(latest.matricula)} · ${latest.direction === "E" ? "Entrada" : "Saída"}</p><div class="access-time"><strong>${parts.time}</strong><small>${parts.date}</small></div></div></div>`;
+    $("#last-access").innerHTML = `<div class="access-hero"><div class="access-photo-frame"><span class="access-photo-fallback"><img src="assets/ponte-id-logo.png" alt=""><b>${escapeHtml(studentInitial(latest.studentName))}</b></span>${accessPhotoImage(latest, "access-photo", `Foto de ${latest.studentName}`)}</div><div class="access-overlay"><span class="eyebrow">Último acesso</span><h2>${escapeHtml(latest.studentName)}</h2><p>${escapeHtml(latest.matricula)} · ${latest.direction === "E" ? "Entrada" : "Saída"}</p><div class="access-time"><strong>${parts.time}</strong><small>${parts.date}</small></div></div></div>`;
   }
   $("#recent-list").innerHTML = state.recentAccesses.length ? state.recentAccesses.slice(0, 7).map(recentRow).join("") : `<div class="empty-state" style="padding:55px 20px"><p>Nenhuma passagem registrada.</p></div>`;
   $("#history-body").innerHTML = state.recentAccesses.map(historyRow).join("");
@@ -207,7 +207,6 @@ function historyRow(item) {
 }
 
 function accessPhotoImage(item, className, alt) {
-  if (!item.photoUrl) return "";
   return `<img class="${className}" data-access-photo-id="${escapeHtml(item.id)}" alt="${escapeHtml(alt)}" decoding="async">`;
 }
 

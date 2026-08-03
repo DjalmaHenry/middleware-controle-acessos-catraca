@@ -276,7 +276,14 @@ function registerIpc(): void {
   ipcMain.handle("photo:get", async (_event, accessId: string) => {
     if (typeof accessId !== "string" || accessId.length > 100) return null;
     const access = store.getRecentAccesses().find((item) => item.id === accessId);
-    return photoService.resolve(access?.photoUrl);
+    if (!access) return null;
+    const currentStudent = store.getStudents().find((student) => student.id === access.studentId)
+      ?? store.getStudents().find((student) => normalizeRegistration(student.matricula) === normalizeRegistration(access.matricula));
+    const activeSoftPhoto = await photoService.resolve(currentStudent?.urlFoto ?? access.photoUrl);
+    if (activeSoftPhoto) return activeSoftPhoto;
+    const idSecurePhoto = await idSecureMonitor.resolveAccessPhoto(access.idSecurePhotoPath);
+    if (idSecurePhoto) return idSecurePhoto;
+    return controlIdPolling.resolveUserPhoto(access.controlIdUserId, access.controlIdDeviceName);
   });
   ipcMain.handle("logs:clear", () => { store.clearIntegrationLogs(); broadcastState(); });
   ipcMain.handle("installation:prepare", async () => {
@@ -356,4 +363,8 @@ function validPort(value: number, label: string): number {
     throw new Error(`${label}: informe um número entre 1 e 65535.`);
   }
   return value;
+}
+
+function normalizeRegistration(value: string): string {
+  return value.trim().replace(/^0+(?=\d)/, "");
 }

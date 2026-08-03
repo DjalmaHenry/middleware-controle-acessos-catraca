@@ -4,6 +4,12 @@ import { JsonStore } from "./store";
 import { AccessRecord, Direction } from "../shared/types";
 import { IntegrationLogger } from "./integration-logger";
 
+interface AccessPhotoContext {
+  idSecurePhotoPath?: string;
+  controlIdUserId?: number;
+  controlIdDeviceName?: string;
+}
+
 export class AccessService {
   private processing = false;
   private readonly inFlight = new Map<string, Promise<AccessRecord>>();
@@ -18,7 +24,8 @@ export class AccessService {
     studentId: number,
     direction?: Direction,
     occurredAt = new Date().toISOString(),
-    recordId: string = randomUUID()
+    recordId: string = randomUUID(),
+    photoContext: AccessPhotoContext = {}
   ): Promise<AccessRecord> {
     if (!this.store.getStudentSync()) {
       throw new Error("Não existe uma sincronização real de alunos da ActiveSoft disponível. Configure o token e sincronize antes de processar acessos.");
@@ -31,7 +38,9 @@ export class AccessService {
     if (existing) return this.sendOnce(existing);
     const record: AccessRecord = {
       id: recordId, studentId, studentName: student.nome, matricula: student.matricula,
-      photoUrl: student.urlFoto, direction: direction ?? this.store.getSettings().direction,
+      photoUrl: student.urlFoto,
+      ...photoContext,
+      direction: direction ?? this.store.getSettings().direction,
       occurredAt, status: "sending"
     };
     this.store.addAccess(record);
@@ -44,7 +53,8 @@ export class AccessService {
     direction?: Direction,
     occurredAt = new Date().toISOString(),
     registration?: string,
-    sourceId?: string
+    sourceId?: string,
+    photoContext: AccessPhotoContext = {}
   ): Promise<AccessRecord> {
     const mappedRegistration = registration || this.store.getControlIdRegistration(userId);
     const students = this.store.getStudents();
@@ -64,7 +74,10 @@ export class AccessService {
       studentId: student.id,
       studentName: student.nome
     });
-    return this.register(student.id, direction, occurredAt, sourceId);
+    return this.register(student.id, direction, occurredAt, sourceId, {
+      controlIdUserId: userId,
+      ...photoContext
+    });
   }
 
   async retryQueue(): Promise<void> {
