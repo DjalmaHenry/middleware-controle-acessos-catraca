@@ -10,7 +10,7 @@ import { AppState, ControlIdDeviceContact, InstallationReport, SaveSettingsInput
 import { createIntegrationLogger, IntegrationLogger } from "./integration-logger";
 import { InstallationService } from "./installation-service";
 import { PhotoService } from "./photo-service";
-import { enableAutoStart, wasStartedAutomatically } from "./startup";
+import { enableAutoStart } from "./startup";
 import { probePonteListener } from "./listener-health";
 import { IdSecureMonitorService, IdSecureMonitorStatus } from "./idsecure-monitor";
 
@@ -116,9 +116,7 @@ function createWindow(): void {
   });
   window.setMenuBarVisibility(false);
   void window.loadFile(path.join(__dirname, "../renderer/index.html"));
-  window.once("ready-to-show", () => {
-    if (!wasStartedAutomatically()) window?.show();
-  });
+  window.once("ready-to-show", showWindow);
   window.on("close", (event) => { if (!quitting) { event.preventDefault(); window?.hide(); } });
 }
 
