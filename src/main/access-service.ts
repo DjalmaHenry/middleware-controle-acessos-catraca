@@ -11,7 +11,6 @@ interface AccessPhotoContext {
 }
 
 export class AccessService {
-  private processing = false;
   private readonly inFlight = new Map<string, Promise<AccessRecord>>();
   constructor(
     private readonly store: JsonStore,
@@ -34,8 +33,7 @@ export class AccessService {
     if (!student) throw new Error(`Aluno ${studentId} não encontrado na sincronização local.`);
     const existing = this.store.getRecentAccesses().find((item) => item.id === recordId)
       ?? this.store.getQueue().find((item) => item.id === recordId);
-    if (existing?.status === "sent") return existing;
-    if (existing) return this.sendOnce(existing);
+    if (existing) return existing;
     const record: AccessRecord = {
       id: recordId, studentId, studentName: student.nome, matricula: student.matricula,
       photoUrl: student.urlFoto,
@@ -59,8 +57,8 @@ export class AccessService {
     const mappedRegistration = registration || this.store.getControlIdRegistration(userId);
     const students = this.store.getStudents();
     const student = mappedRegistration
-      ? students.find((item) => normalizeRegistration(item.matricula) === normalizeRegistration(mappedRegistration))
-      : students.find((item) => item.id === userId);
+      ? findStudentByRegistration(students, mappedRegistration)
+      : undefined;
     if (!student) {
       const message = mappedRegistration
         ? `Matrícula ${mappedRegistration} do usuário Control iD ${userId} não encontrada na ActiveSoft.`
@@ -87,7 +85,8 @@ export class AccessService {
     occurredAt: string,
     sourceId: string,
     message: string,
-    photoContext: AccessPhotoContext = {}
+    photoContext: AccessPhotoContext = {},
+    registration?: string
   ): AccessRecord {
     const existing = this.store.getRecentAccesses().find((item) => item.id === sourceId);
     if (existing) return existing;
@@ -95,7 +94,7 @@ export class AccessService {
       id: sourceId,
       studentId: 0,
       studentName: studentName?.trim() || `Usuário Control iD ${userId}`,
-      matricula: "Não informada",
+      matricula: registration?.trim() || "Não informada",
       controlIdUserId: userId,
       ...photoContext,
       direction,
@@ -106,24 +105,6 @@ export class AccessService {
     this.store.addAccess(record);
     this.onChange();
     return record;
-  }
-
-  async retryQueue(): Promise<void> {
-    if (this.processing) return;
-    this.processing = true;
-    try {
-      for (const record of this.store.getQueue().reverse()) await this.sendOnce(record);
-    } finally {
-      this.processing = false;
-    }
-  }
-
-  async waitUntilIdle(timeoutMs = 20_000): Promise<void> {
-    const deadline = Date.now() + timeoutMs;
-    while (this.processing || this.inFlight.size > 0) {
-      if (Date.now() >= deadline) throw new Error("Há um envio à ActiveSoft ainda em andamento. Aguarde alguns segundos e tente novamente.");
-      await new Promise((resolve) => setTimeout(resolve, 25));
-    }
   }
 
   private sendOnce(record: AccessRecord): Promise<AccessRecord> {
@@ -143,15 +124,21 @@ export class AccessService {
       this.onChange();
       return sent;
     } catch (error) {
-      const queued = { ...record, status: "queued" as const, message: error instanceof Error ? error.message : String(error) };
-      this.store.enqueue(queued);
-      this.store.addAccess(queued);
+      const failed = { ...record, status: "failed" as const, message: error instanceof Error ? error.message : String(error) };
+      this.store.dequeue(record.id);
+      this.store.addAccess(failed);
       this.onChange();
-      return queued;
+      return failed;
     }
   }
 }
 
 function normalizeRegistration(value: string): string {
   return value.trim().replace(/^0+(?=\d)/, "");
+}
+
+export function findStudentByRegistration<T extends { matricula: string }>(students: T[], registration: string): T | undefined {
+  const exact = registration.trim();
+  return students.find((student) => student.matricula.trim() === exact)
+    ?? students.find((student) => normalizeRegistration(student.matricula) === normalizeRegistration(exact));
 }

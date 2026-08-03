@@ -58,13 +58,13 @@ test("deduplica chamadas simultâneas pelo idLog do iDSecure", async () => {
   assert.ok(logs.some((entry) => entry.title === "Matrícula iDSecure associada ao aluno ActiveSoft"));
 });
 
-test("mantém na fila após falha e não reenvia depois de concluído", async () => {
+test("finaliza no histórico após falha e não tenta novamente", async () => {
   const store = new MemoryAccessStore();
   let sends = 0;
   const activeSoft = {
     markAttendance: async () => {
       sends += 1;
-      if (sends === 1) throw new Error("indisponível");
+      throw new Error("indisponível");
     }
   };
   const service = new AccessService(
@@ -75,16 +75,35 @@ test("mantém na fila após falha e não reenvia depois de concluído", async ()
   );
 
   const first = await service.registerControlIdUser(99, "E", undefined, "0054", "idsecure:log:175325");
-  assert.equal(first.status, "queued");
-  assert.equal(store.queue.length, 1);
-
-  const second = await service.registerControlIdUser(99, "E", undefined, "0054", "idsecure:log:175325");
-  assert.equal(second.status, "sent");
+  assert.equal(first.status, "failed");
   assert.equal(store.queue.length, 0);
 
-  const third = await service.registerControlIdUser(99, "E", undefined, "0054", "idsecure:log:175325");
-  assert.equal(third.status, "sent");
-  assert.equal(sends, 2);
+  const second = await service.registerControlIdUser(99, "E", undefined, "0054", "idsecure:log:175325");
+  assert.equal(second.status, "failed");
+  assert.equal(store.queue.length, 0);
+  assert.equal(sends, 1);
+});
+
+test("cruza matrículas primeiro exatamente e depois ignorando zeros à esquerda", async () => {
+  const store = new MemoryAccessStore();
+  store.students = [
+    { id: 10, matricula: "0054", nome: "Com zeros" },
+    { id: 11, matricula: "81", nome: "Sem zeros" }
+  ];
+  const sentRegistrations: string[] = [];
+  const service = new AccessService(
+    store as unknown as JsonStore,
+    { markAttendance: async (registration: string) => { sentRegistrations.push(registration); } } as unknown as ActiveSoftClient,
+    () => undefined,
+    () => undefined
+  );
+
+  const withoutZeros = await service.registerControlIdUser(99, "E", undefined, "54", "match:54");
+  const withZeros = await service.registerControlIdUser(100, "E", undefined, "0081", "match:81");
+
+  assert.equal(withoutZeros.studentName, "Com zeros");
+  assert.equal(withZeros.studentName, "Sem zeros");
+  assert.deepEqual(sentRegistrations, ["0054", "81"]);
 });
 
 test("arquiva localmente um acesso sem matrícula sem chamar a ActiveSoft", () => {

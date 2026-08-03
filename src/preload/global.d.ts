@@ -6,7 +6,6 @@ declare global {
       getState(): Promise<AppState>;
       saveSettings(settings: SaveSettingsInput): Promise<AppState>;
       synchronize(): Promise<void>;
-      clearQueue(): Promise<AppState>;
       testConnection(): Promise<boolean>;
       getAccessPhoto(accessId: string): Promise<string | null>;
       clearLogs(): Promise<void>;

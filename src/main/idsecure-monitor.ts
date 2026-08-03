@@ -92,7 +92,8 @@ interface MonitorAccessService {
       idSecurePhotoPath?: string;
       controlIdUserId?: number;
       controlIdDeviceName?: string;
-    }
+    },
+    registration?: string
   ): unknown;
 }
 
@@ -196,15 +197,6 @@ export class IdSecureMonitorService {
     this.tokenExpiresAt = 0;
   }
 
-  async stopAndWait(timeoutMs = 20_000): Promise<void> {
-    this.stop();
-    const deadline = Date.now() + timeoutMs;
-    while (this.running || this.processingPending) {
-      if (Date.now() >= deadline) throw new Error("A consulta do iDSecure ainda está em andamento. Aguarde alguns segundos e tente novamente.");
-      await new Promise((resolve) => setTimeout(resolve, 25));
-    }
-  }
-
   async testConnection(): Promise<void> {
     const settings = this.getSettings();
     this.validateSettings(settings);
@@ -289,6 +281,7 @@ export class IdSecureMonitorService {
     const token = await this.tokenFor(settings);
     const accesses = await this.loadMonitorWithRetry(settings, token, cursor ?? 0);
     this.online("Monitor de acessos sendo consultado.");
+    this.discardExpiredCorrelations();
 
     if (cursor === undefined) {
       const baseline = accesses.reduce((latest, access) => Math.max(latest, Number(access.idLog) || 0), 0);
@@ -376,43 +369,17 @@ export class IdSecureMonitorService {
           continue;
         }
 
+        let resolvedRegistration = String(pending.registration ?? "").trim();
         try {
-          let registration = String(pending.registration ?? "").trim();
+          let registration = resolvedRegistration;
           if (!registration) {
             const user = await this.loadUserWithRetry(settings, pending.userId, pending.name);
             registration = String(user.registration ?? "").trim();
           }
+          resolvedRegistration = registration;
           if (!registration) {
             const message = `O usuário ${pending.userId} (${pending.name || "sem nome"}) não possui matrícula no iDSecure.`;
-            if (pending.attempts < 1) throw new Error(message);
-            if (!this.accessService.recordUnlinkedControlIdUser) {
-              throw new Error("O serviço de histórico local não está disponível.");
-            }
-            const direction = directionFor(pending.info, settings.direction);
-            await this.accessService.recordUnlinkedControlIdUser(
-              pending.userId,
-              pending.name,
-              direction,
-              parseIdSecureDate(pending.time),
-              sourceId,
-              message,
-              {
-                idSecurePhotoPath: pending.photoPath,
-                controlIdUserId: pending.userId,
-                controlIdDeviceName: pending.device
-              }
-            );
-            this.onDirection(direction);
-            this.store.markProcessedControlIdAccess(sourceId);
-            this.store.removePendingIdSecureAccess(pending.idLog);
-            this.log("system", "Acesso arquivado sem envio à ActiveSoft", {
-              idLog: pending.idLog,
-              idUser: pending.userId,
-              name: pending.name || null,
-              reason: "Matrícula ausente no campo registration do iDSecure",
-              attempts: pending.attempts + 1
-            });
-            continue;
+            throw new Error(message);
           }
 
           const direction = directionFor(pending.info, settings.direction);
@@ -434,28 +401,72 @@ export class IdSecureMonitorService {
           this.store.markProcessedControlIdAccess(sourceId);
           this.store.removePendingIdSecureAccess(pending.idLog);
         } catch (error) {
-          const attempts = pending.attempts + 1;
           const message = error instanceof Error ? error.message : String(error);
-          this.store.savePendingIdSecureAccess({
-            ...pending,
-            attempts,
-            lastAttemptAt: new Date().toISOString(),
-            lastError: message
-          });
-          if (attempts === 1 || attempts % 10 === 0) {
-            this.log("error", "Acesso autorizado guardado para nova tentativa", {
-              idLog: pending.idLog,
-              idUser: pending.userId,
-              name: pending.name || null,
-              attempt: attempts,
-              message,
-              detail: "O evento permanece salvo no computador e não será descartado."
-            });
-          }
+          await this.archiveFailedAccess(
+            { ...pending, registration: resolvedRegistration || undefined },
+            settings,
+            sourceId,
+            message
+          );
         }
       }
     } finally {
       this.processingPending = false;
+    }
+  }
+
+  private async archiveFailedAccess(
+    pending: PendingIdSecureAccess,
+    settings: Settings,
+    sourceId: string,
+    message: string
+  ): Promise<void> {
+    const direction = directionFor(pending.info, settings.direction);
+    if (this.accessService.recordUnlinkedControlIdUser) {
+      await this.accessService.recordUnlinkedControlIdUser(
+        pending.userId,
+        pending.name,
+        direction,
+        parseIdSecureDate(pending.time),
+        sourceId,
+        message,
+        {
+          idSecurePhotoPath: pending.photoPath,
+          controlIdUserId: pending.userId,
+          controlIdDeviceName: pending.device
+        },
+        pending.registration
+      );
+    }
+    this.onDirection(direction);
+    this.store.markProcessedControlIdAccess(sourceId);
+    this.store.removePendingIdSecureAccess(pending.idLog);
+    this.log("error", "Acesso não enviado à ActiveSoft", {
+      idLog: pending.idLog,
+      idUser: pending.userId,
+      name: pending.name || null,
+      registration: pending.registration || null,
+      message,
+      detail: "Tentativa única finalizada; o acesso permanece somente no histórico local."
+    });
+  }
+
+  private discardExpiredCorrelations(now = Date.now()): void {
+    for (const pending of this.store.getPendingIdSecureAccesses()) {
+      if (!pending.awaitingTurn || !isExpired(pending.receivedAt, now)) continue;
+      const sourceId = `idsecure:log:${pending.idLog}`;
+      this.store.markProcessedControlIdAccess(sourceId);
+      this.store.removePendingIdSecureAccess(pending.idLog);
+      this.log("system", "Identificação descartada sem giro físico", {
+        idLog: pending.idLog,
+        idUser: pending.userId,
+        device: pending.device || null
+      });
+    }
+    for (const turn of this.store.getPendingPhysicalTurns()) {
+      if (!isExpired(turn.receivedAt, now)) continue;
+      this.store.removePendingPhysicalTurn(turn.key);
+      this.store.markProcessedControlIdAccess(`controlid:turn:${turn.key}`);
     }
   }
 
@@ -818,6 +829,12 @@ function isReleased(value: unknown): boolean {
 
 function normalizeDeviceName(value: unknown): string {
   return String(value ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-zA-Z0-9]/g, "").toLowerCase();
+}
+
+function isExpired(receivedAt: string | undefined, now: number): boolean {
+  if (!receivedAt) return false;
+  const received = Date.parse(receivedAt);
+  return Number.isFinite(received) && now - received > PHYSICAL_CONFIRMATION_WINDOW_MS;
 }
 
 function parseIdSecureDate(value: unknown): string {

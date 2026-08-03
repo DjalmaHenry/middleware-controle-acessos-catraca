@@ -307,7 +307,7 @@ test("GIVE UP remove o acesso liberado sem registrar presença", async () => {
   assert.equal(store.processed.has("idsecure:log:700"), true);
 });
 
-test("um usuário sem matrícula é arquivado após uma retentativa e não bloqueia os acessos seguintes", async () => {
+test("um usuário sem matrícula é arquivado imediatamente e não bloqueia os acessos seguintes", async () => {
   const store = new MemoryStore();
   store.cursor = 200;
   let missingRegistrationQueries = 0;
@@ -351,7 +351,7 @@ test("um usuário sem matrícula é arquivado após uma retentativa e não bloqu
   assert.deepEqual(registrations, ["0099"]);
   assert.equal(store.pending.has(201), false);
   assert.equal(store.pending.has(202), false);
-  assert.equal(missingRegistrationQueries, 2, "a ausência deve ser confirmada novamente no iDSecure");
+  assert.equal(missingRegistrationQueries, 1, "a ausência é finalizada na mesma passagem, sem nova rodada");
   assert.deepEqual(archived, [{
     userId: 1,
     sourceId: "idsecure:log:201",
@@ -361,7 +361,7 @@ test("um usuário sem matrícula é arquivado após uma retentativa e não bloqu
   assert.deepEqual(registrations, ["0099"], "o evento seguinte não pode ser enviado novamente");
 });
 
-test("falhas diferentes de matrícula ausente continuam pendentes", async () => {
+test("uma falha de integração é arquivada sem retentativa", async () => {
   const store = new MemoryStore();
   store.cursor = 800;
   store.pending.set(800, {
@@ -390,12 +390,50 @@ test("falhas diferentes de matrícula ausente continuam pendentes", async () => 
   );
 
   await service.pollNow();
+
+  assert.equal(store.pending.has(800), false);
+  assert.equal(store.processed.has("idsecure:log:800"), true);
+  assert.equal(archived, 1);
+});
+
+test("descarta automaticamente correlações antigas sem formar fila", async () => {
+  const store = new MemoryStore();
+  store.cursor = 900;
+  const oldDate = new Date(Date.now() - 120_000).toISOString();
+  store.pending.set(900, {
+    idLog: 900,
+    userId: 90,
+    device: "CATRACA 1",
+    awaitingTurn: true,
+    receivedAt: oldDate,
+    attempts: 0
+  });
+  store.physical.set("catraca-1:901", {
+    key: "catraca-1:901",
+    device: "CATRACA 1",
+    eventId: 901,
+    event: "TURN_LEFT",
+    receivedAt: oldDate
+  });
+  const requester: JsonRequester = async (url) => url.pathname === "/api/login/"
+    ? { status: 200, body: { accessToken: "token" } }
+    : { status: 200, body: { data: [] } };
+  const service = new IdSecureMonitorService(
+    { registerControlIdUser: async () => undefined },
+    store,
+    () => settings,
+    () => undefined,
+    () => undefined,
+    () => undefined,
+    requester
+  );
+
   await service.pollNow();
 
-  assert.equal(store.pending.has(800), true);
-  assert.equal(store.pending.get(800)?.attempts, 3);
-  assert.equal(store.processed.has("idsecure:log:800"), false);
-  assert.equal(archived, 0);
+  assert.equal(store.pending.size, 0);
+  assert.equal(store.physical.size, 0);
+  assert.equal(store.processed.has("idsecure:log:900"), true);
+  assert.equal(store.processed.has("controlid:turn:catraca-1:901"), true);
 });
 
 test("retoma após reinício um acesso persistido antes do envio", async () => {

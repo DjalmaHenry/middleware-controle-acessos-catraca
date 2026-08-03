@@ -30,21 +30,6 @@ interface PersistedData {
   processedControlIdAccesses: Record<string, string>;
 }
 
-export interface PendingWorkState {
-  recentAccesses: AccessRecord[];
-  queue: AccessRecord[];
-  pendingControlIdAccesses: Record<string, { userId: number; time: number; registration?: string }>;
-  pendingIdSecureAccesses: Record<string, PendingIdSecureAccess>;
-  pendingPhysicalTurns: Record<string, PendingPhysicalTurn>;
-}
-
-export interface ClearedPendingWork {
-  activeSoft: number;
-  idSecure: number;
-  controlId: number;
-  physicalTurns: number;
-}
-
 const defaults: PersistedData = {
   settings: {
     configured: false,
@@ -143,11 +128,6 @@ export class JsonStore {
     this.persist();
   }
   dequeue(id: string): void { this.data.queue = this.data.queue.filter((item) => item.id !== id); this.persist(); }
-  clearPendingWork(message: string): ClearedPendingWork {
-    const result = clearPendingWorkState(this.data, message);
-    this.persist();
-    return result;
-  }
   getIntegrationLogs(): IntegrationLog[] {
     return this.data.integrationLogs.filter((entry) => !isNoisyStudentListingLog(entry));
   }
@@ -279,96 +259,47 @@ export class JsonStore {
   }
 }
 
-export function clearPendingWorkState(data: PendingWorkState, message: string): ClearedPendingWork {
-  const queuedIds = new Set(data.queue.map((record) => record.id));
-  const result = {
-    activeSoft: data.queue.length,
-    idSecure: Object.keys(data.pendingIdSecureAccesses).length,
-    controlId: Object.keys(data.pendingControlIdAccesses).length,
-    physicalTurns: Object.keys(data.pendingPhysicalTurns).length
-  };
-  data.recentAccesses = data.recentAccesses.map((record) => queuedIds.has(record.id)
-    ? { ...record, status: "failed", message }
-    : record);
-  data.queue = [];
-  data.pendingIdSecureAccesses = {};
-  data.pendingControlIdAccesses = {};
-  data.pendingPhysicalTurns = {};
-  return result;
-}
-
 function normalizePersistedData(loaded: Partial<PersistedData>): PersistedData {
   const studentSync = normalizeStudentSync(loaded.studentSync);
   const hasVerifiedStudentCache = Boolean(studentSync);
+  const recentAccesses = hasVerifiedStudentCache && Array.isArray(loaded.recentAccesses) ? loaded.recentAccesses : [];
+  const legacyQueue = hasVerifiedStudentCache && Array.isArray(loaded.queue) ? loaded.queue : [];
   return {
     settings: normalizeSettings(loaded.settings),
     students: hasVerifiedStudentCache && Array.isArray(loaded.students) ? loaded.students : [],
     studentSync,
-    recentAccesses: hasVerifiedStudentCache && Array.isArray(loaded.recentAccesses) ? loaded.recentAccesses : [],
-    queue: hasVerifiedStudentCache && Array.isArray(loaded.queue) ? loaded.queue : [],
+    recentAccesses: discardLegacyQueue(recentAccesses, legacyQueue),
+    queue: [],
     integrationLogs: hasVerifiedStudentCache && Array.isArray(loaded.integrationLogs) ? loaded.integrationLogs : [],
     controlIdMappings: loaded.controlIdMappings && typeof loaded.controlIdMappings === "object"
       ? loaded.controlIdMappings
       : {},
-    pendingControlIdAccesses: loaded.pendingControlIdAccesses && typeof loaded.pendingControlIdAccesses === "object"
-      ? loaded.pendingControlIdAccesses
-      : {},
+    pendingControlIdAccesses: {},
     controlIdPollingCursors: loaded.controlIdPollingCursors && typeof loaded.controlIdPollingCursors === "object"
       ? loaded.controlIdPollingCursors
       : {},
     idSecureMonitorCursor: typeof loaded.idSecureMonitorCursor === "number"
       ? loaded.idSecureMonitorCursor
       : undefined,
-    pendingIdSecureAccesses: normalizePendingIdSecureAccesses(loaded.pendingIdSecureAccesses),
-    pendingPhysicalTurns: normalizePendingPhysicalTurns(loaded.pendingPhysicalTurns),
+    pendingIdSecureAccesses: {},
+    pendingPhysicalTurns: {},
     processedControlIdAccesses: loaded.processedControlIdAccesses && typeof loaded.processedControlIdAccesses === "object"
       ? loaded.processedControlIdAccesses
       : {}
   };
 }
 
-function normalizePendingPhysicalTurns(value: unknown): Record<string, PendingPhysicalTurn> {
-  if (!value || typeof value !== "object") return {};
-  return Object.fromEntries(Object.entries(value).flatMap(([key, entry]) => {
-    if (!entry || typeof entry !== "object") return [];
-    const source = entry as Partial<PendingPhysicalTurn>;
-    const eventId = Number(source.eventId);
-    const event = source.event;
-    if (!source.device || !Number.isFinite(eventId) || !["TURN_LEFT", "TURN_RIGHT", "GIVE_UP"].includes(String(event))) return [];
-    return [[key, {
-      key,
-      device: String(source.device),
-      eventId,
-      event: event as PendingPhysicalTurn["event"],
-      receivedAt: typeof source.receivedAt === "string" ? source.receivedAt : new Date(0).toISOString()
-    } satisfies PendingPhysicalTurn]];
-  }));
-}
-
-function normalizePendingIdSecureAccesses(value: unknown): Record<string, PendingIdSecureAccess> {
-  if (!value || typeof value !== "object") return {};
-  return Object.fromEntries(Object.entries(value).flatMap(([key, entry]) => {
-    if (!entry || typeof entry !== "object") return [];
-    const source = entry as Partial<PendingIdSecureAccess>;
-    const idLog = Number(source.idLog ?? key);
-    const userId = Number(source.userId);
-    if (!Number.isFinite(idLog) || !Number.isFinite(userId) || idLog <= 0 || userId <= 0) return [];
-    return [[String(idLog), {
-      idLog,
-      userId,
-      registration: typeof source.registration === "string" ? source.registration : undefined,
-      name: typeof source.name === "string" ? source.name : undefined,
-      device: typeof source.device === "string" ? source.device : undefined,
-      photoPath: typeof source.photoPath === "string" ? source.photoPath : undefined,
-      info: typeof source.info === "string" ? source.info : undefined,
-      time: typeof source.time === "string" ? source.time : undefined,
-      receivedAt: typeof source.receivedAt === "string" ? source.receivedAt : undefined,
-      awaitingTurn: source.awaitingTurn === true,
-      attempts: Number.isFinite(Number(source.attempts)) ? Math.max(0, Number(source.attempts)) : 0,
-      lastAttemptAt: typeof source.lastAttemptAt === "string" ? source.lastAttemptAt : undefined,
-      lastError: typeof source.lastError === "string" ? source.lastError : undefined
-    } satisfies PendingIdSecureAccess]];
-  }));
+export function discardLegacyQueue(recentAccesses: AccessRecord[], queue: AccessRecord[]): AccessRecord[] {
+  const queuedById = new Map(queue.map((record) => [record.id, record]));
+  const message = "Descartado na atualização: o Ponte ID agora usa tentativa única sem fila.";
+  const migrated = recentAccesses.map((record) => queuedById.has(record.id)
+    ? { ...record, status: "failed" as const, message }
+    : record);
+  const knownIds = new Set(migrated.map((record) => record.id));
+  const missing = queue
+    .filter((record) => !knownIds.has(record.id))
+    .map((record) => ({ ...record, status: "failed" as const, message }));
+  return [...missing, ...migrated].slice(0, MAX_ACCESS_HISTORY);
 }
 
 function normalizeRegistration(value: string): string {

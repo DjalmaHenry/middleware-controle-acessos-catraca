@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { clearPendingWorkState, PendingWorkState } from "../main/store";
+import { discardLegacyQueue } from "../main/store";
 import { AccessRecord } from "../shared/types";
 
 function access(id: string, status: AccessRecord["status"]): AccessRecord {
@@ -15,27 +15,16 @@ function access(id: string, status: AccessRecord["status"]): AccessRecord {
   };
 }
 
-test("zera todas as pendências sem apagar o histórico", () => {
+test("descarta a fila legada sem apagar o histórico", () => {
   const queued = access("queued", "queued");
+  const missingFromHistory = access("missing", "queued");
   const sent = access("sent", "sent");
-  const state: PendingWorkState = {
-    recentAccesses: [queued, sent],
-    queue: [queued],
-    pendingControlIdAccesses: { "10": { userId: 7, time: 1 } },
-    pendingIdSecureAccesses: { "20": { idLog: 20, userId: 7, attempts: 2 } },
-    pendingPhysicalTurns: {
-      turn: { key: "turn", device: "CATRACA 1", eventId: 30, event: "TURN_LEFT", receivedAt: "2026-08-03T15:00:00.000Z" }
-    }
-  };
 
-  const removed = clearPendingWorkState(state, "Removido manualmente da fila de envio.");
+  const migrated = discardLegacyQueue([queued, sent], [queued, missingFromHistory]);
 
-  assert.deepEqual(removed, { activeSoft: 1, idSecure: 1, controlId: 1, physicalTurns: 1 });
-  assert.equal(state.queue.length, 0);
-  assert.equal(Object.keys(state.pendingControlIdAccesses).length, 0);
-  assert.equal(Object.keys(state.pendingIdSecureAccesses).length, 0);
-  assert.equal(Object.keys(state.pendingPhysicalTurns).length, 0);
-  assert.equal(state.recentAccesses.find((record) => record.id === "queued")?.status, "failed");
-  assert.equal(state.recentAccesses.find((record) => record.id === "queued")?.message, "Removido manualmente da fila de envio.");
-  assert.equal(state.recentAccesses.find((record) => record.id === "sent")?.status, "sent");
+  assert.equal(migrated.length, 3);
+  assert.equal(migrated.find((record) => record.id === "queued")?.status, "failed");
+  assert.match(migrated.find((record) => record.id === "queued")?.message ?? "", /tentativa única sem fila/);
+  assert.equal(migrated.find((record) => record.id === "missing")?.status, "failed");
+  assert.equal(migrated.find((record) => record.id === "sent")?.status, "sent");
 });

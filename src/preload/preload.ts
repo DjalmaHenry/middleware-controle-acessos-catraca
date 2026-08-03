@@ -5,7 +5,6 @@ contextBridge.exposeInMainWorld("ponte", {
   getState: (): Promise<AppState> => ipcRenderer.invoke("state:get"),
   saveSettings: (settings: SaveSettingsInput): Promise<AppState> => ipcRenderer.invoke("settings:save", settings),
   synchronize: (): Promise<void> => ipcRenderer.invoke("sync:run"),
-  clearQueue: (): Promise<AppState> => ipcRenderer.invoke("queue:clear"),
   testConnection: (): Promise<boolean> => ipcRenderer.invoke("connection:test"),
   getAccessPhoto: (accessId: string): Promise<string | null> => ipcRenderer.invoke("photo:get", accessId),
   clearLogs: (): Promise<void> => ipcRenderer.invoke("logs:clear"),

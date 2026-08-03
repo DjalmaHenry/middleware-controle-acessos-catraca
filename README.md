@@ -37,7 +37,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\build-windows.ps1
 O instalador será criado em:
 
 ```text
-release\Ponte ID Setup 0.2.12.exe
+release\Ponte ID Setup 0.2.13.exe
 ```
 
 Para executar cada etapa manualmente:
@@ -66,16 +66,16 @@ Em um Mac com Node.js 22 LTS, execute na raiz do projeto:
 O script instala as dependências, executa os testes e gera o mesmo instalador NSIS x64 em:
 
 ```text
-release/Ponte ID Setup 0.2.12.exe
+release/Ponte ID Setup 0.2.13.exe
 ```
 
 Em Macs com Apple Silicon, o script verifica e instala o Rosetta 2 automaticamente na primeira execução. Esta build não requer Docker nem Wine. O comando equivalente pelo npm é `npm run build:windows:macos`.
 
 ## Persistência e inicialização
 
-Configurações, alunos sincronizados, histórico recente, fila pendente, cursores de consulta, associações Control iD e logs são mantidos no diretório de dados do Ponte ID dentro de `%APPDATA%`. O token ActiveSoft, a senha do iDSecure e a senha das catracas são criptografados com a proteção de credenciais do usuário do Windows. O aplicativo mantém também uma cópia de recuperação do arquivo local e o instalador não remove esses dados durante atualização ou desinstalação.
+Configurações, alunos sincronizados, histórico recente, cursores de consulta, associações Control iD e logs são mantidos no diretório de dados do Ponte ID dentro de `%APPDATA%`. O token ActiveSoft, a senha do iDSecure e a senha das catracas são criptografados com a proteção de credenciais do usuário do Windows. O aplicativo mantém também uma cópia de recuperação do arquivo local e o instalador não remove esses dados durante atualização ou desinstalação.
 
-O início automático é obrigatório: após o login na mesma conta do Windows usada na configuração, o Ponte ID inicia oculto e permanece na bandeja. Abrir o atalho quando ele já estiver em execução apenas mostra a janela existente. A validação da instalação também detecta quando a entrada foi desabilitada em `Gerenciador de Tarefas > Aplicativos de inicialização`.
+O início automático é obrigatório: após o login na mesma conta do Windows usada na configuração, o Ponte ID abre a janela e permanece também disponível na bandeja. Abrir o atalho quando ele já estiver em execução apenas mostra a janela existente. A validação da instalação também detecta quando a entrada foi desabilitada em `Gerenciador de Tarefas > Aplicativos de inicialização`.
 
 Como a criptografia do token e o auto-início pertencem à conta do Windows, a escola deve manter a mesma conta operacional. Para iniciar antes de qualquer login seria necessário separar o receptor em um Serviço do Windows; a aplicação atual inicia imediatamente após o login.
 
@@ -87,9 +87,9 @@ Na instalação Enterprise, a pessoa identificada fica no servidor central, enqu
 - `GET /api/access/monitor`, para acompanhar eventos incrementalmente por `idLog`;
 - `POST /api/user/list`, para localizar o campo `registration` pelo `idUser`.
 
-O certificado HTTPS local do iDSecure é aceito somente nas requisições ao endereço explicitamente configurado. O Bearer nunca é persistido. Na primeira conexão, o cursor começa no último `idLog`, evitando enviar histórico antigo. Depois disso, cada acesso autorizado é salvo no disco antes de o cursor avançar e permanece em uma fila durável até ser aceito pela fila da ActiveSoft. O `idLog` é usado como identificador determinístico para deduplicar retomadas e chamadas simultâneas após reinício.
+O certificado HTTPS local do iDSecure é aceito somente nas requisições ao endereço explicitamente configurado. O Bearer nunca é persistido. Na primeira conexão, o cursor começa no último `idLog`, evitando enviar histórico antigo. Depois da confirmação do giro, cada acesso faz uma única tentativa imediata de envio à ActiveSoft. Sucesso fica como `Enviado`; qualquer falha fica somente no histórico local como `Não enviado`, sem fila ou retentativa. O `idLog` continua sendo usado para impedir o envio duplicado do mesmo evento.
 
-Eventos negados e não identificados aparecem no Console, mas não geram presença. Eventos autorizados (`eventCode: 7`) e eventos pendentes já liberados (`eventCode: 8` com `info: Liberado`) ficam guardados até o Ponte ID observar `TURN LEFT` ou `TURN RIGHT` na mesma catraca. Somente o giro físico confirma a presença; `GIVE UP` cancela a pendência. O sentido do giro define Entrada ou Saída conforme a calibração configurada.
+Eventos negados e não identificados aparecem no Console, mas não geram presença. Eventos autorizados (`eventCode: 7`) e eventos pendentes já liberados (`eventCode: 8` com `info: Liberado`) aguardam por até 60 segundos o `TURN LEFT` ou `TURN RIGHT` da mesma catraca. Somente o giro físico confirma a presença; `GIVE UP` ou o fim desse prazo descartam a correlação. O sentido do giro define Entrada ou Saída conforme a calibração configurada.
 
 ## Diagnóstico direto das catracas
 
